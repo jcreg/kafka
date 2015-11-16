@@ -21,11 +21,10 @@ import java.util.Properties
 
 import com.yammer.metrics.Metrics
 import com.yammer.metrics.core.MetricPredicate
-import org.junit.Test
-import junit.framework.Assert._
+import org.junit.{After, Test}
+import org.junit.Assert._
 import kafka.integration.KafkaServerTestHarness
 import kafka.server._
-import kafka.message._
 import kafka.serializer._
 import kafka.utils._
 import kafka.admin.AdminUtils
@@ -33,9 +32,8 @@ import kafka.utils.TestUtils._
 import scala.collection._
 import scala.collection.JavaConversions._
 import scala.util.matching.Regex
-import org.scalatest.junit.JUnit3Suite
 
-class MetricsTest extends JUnit3Suite with KafkaServerTestHarness with Logging {
+class MetricsTest extends KafkaServerTestHarness with Logging {
   val numNodes = 2
   val numParts = 2
   val topic = "topic1"
@@ -48,6 +46,7 @@ class MetricsTest extends JUnit3Suite with KafkaServerTestHarness with Logging {
 
   val nMessages = 2
 
+  @After
   override def tearDown() {
     super.tearDown()
   }
@@ -55,7 +54,7 @@ class MetricsTest extends JUnit3Suite with KafkaServerTestHarness with Logging {
   @Test
   def testMetricsLeak() {
     // create topic topic1 with 1 partition on broker 0
-    createTopic(zkClient, topic, numPartitions = 1, replicationFactor = 1, servers = servers)
+    createTopic(zkUtils, topic, numPartitions = 1, replicationFactor = 1, servers = servers)
     // force creation not client's specific metrics.
     createAndShutdownStep("group0", "consumer0", "producer0")
 
@@ -70,9 +69,9 @@ class MetricsTest extends JUnit3Suite with KafkaServerTestHarness with Logging {
   @Test
   def testMetricsReporterAfterDeletingTopic() {
     val topic = "test-topic-metric"
-    AdminUtils.createTopic(zkClient, topic, 1, 1)
-    AdminUtils.deleteTopic(zkClient, topic)
-    TestUtils.verifyTopicDeletion(zkClient, topic, 1, servers)
+    AdminUtils.createTopic(zkUtils, topic, 1, 1)
+    AdminUtils.deleteTopic(zkUtils, topic)
+    TestUtils.verifyTopicDeletion(zkUtils, topic, 1, servers)
     assertFalse("Topic metrics exists after deleteTopic", checkTopicMetricsExists(topic))
   }
 

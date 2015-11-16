@@ -22,11 +22,10 @@ import java.nio.ByteBuffer
 import kafka.utils.Logging
 import org.apache.kafka.common.protocol.SecurityProtocol
 import org.junit.Test
-import org.scalatest.junit.JUnit3Suite
 
 import scala.collection.mutable
 
-class BrokerEndPointTest extends JUnit3Suite with Logging {
+class BrokerEndPointTest extends Logging {
 
   @Test
   def testSerDe() = {
@@ -98,6 +97,11 @@ class BrokerEndPointTest extends JUnit3Suite with Logging {
     connectionString = "[::1]:9092"
     endpoint = BrokerEndPoint.createBrokerEndPoint(1, connectionString)
     assert(endpoint.host == "::1")
+    assert(endpoint.port == 9092)
+    // add test for uppercase in hostname
+    connectionString = "MyHostname:9092"
+    endpoint = BrokerEndPoint.createBrokerEndPoint(1, connectionString)
+    assert(endpoint.host == "MyHostname")
     assert(endpoint.port == 9092)
   }
 

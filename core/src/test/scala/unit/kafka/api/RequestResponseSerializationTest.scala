@@ -18,9 +18,12 @@
 package kafka.api
 
 
+import java.nio.channels.GatheringByteChannel
+
 import kafka.cluster.{BrokerEndPoint, EndPoint, Broker}
 import kafka.common.{OffsetAndMetadata, ErrorMapping, OffsetMetadataAndError}
 import kafka.common._
+import kafka.consumer.FetchRequestAndResponseStatsRegistry
 import kafka.message.{Message, ByteBufferMessageSet}
 import kafka.utils.SystemTime
 
@@ -32,7 +35,7 @@ import java.nio.ByteBuffer
 import org.apache.kafka.common.protocol.SecurityProtocol
 import org.junit._
 import org.scalatest.junit.JUnitSuite
-import junit.framework.Assert._
+import org.junit.Assert._
 
 
 object SerializationTestUtils {
@@ -150,7 +153,7 @@ object SerializationTestUtils {
     ProducerResponse(1, Map(
       TopicAndPartition(topic1, 0) -> ProducerResponseStatus(0.toShort, 10001),
       TopicAndPartition(topic2, 0) -> ProducerResponseStatus(0.toShort, 20001)
-    ))
+    ), ProducerRequest.CurrentVersion, 100)
 
   def createTestFetchRequest: FetchRequest = {
     new FetchRequest(requestInfo = requestInfos)
@@ -228,12 +231,12 @@ object SerializationTestUtils {
     ))
   }
 
-  def createConsumerMetadataRequest: ConsumerMetadataRequest = {
-    ConsumerMetadataRequest("group 1", clientId = "client 1")
+  def createConsumerMetadataRequest: GroupCoordinatorRequest = {
+    GroupCoordinatorRequest("group 1", clientId = "client 1")
   }
 
-  def createConsumerMetadataResponse: ConsumerMetadataResponse = {
-    ConsumerMetadataResponse(Some(brokers.head.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)), ErrorMapping.NoError, 0)
+  def createConsumerMetadataResponse: GroupCoordinatorResponse = {
+    GroupCoordinatorResponse(Some(brokers.head.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)), ErrorMapping.NoError, 0)
   }
 
   def createUpdateMetadataRequest(versionId: Short): UpdateMetadataRequest = {
@@ -273,7 +276,7 @@ class RequestResponseSerializationTest extends JUnitSuite {
   private val offsetFetchResponse = SerializationTestUtils.createTestOffsetFetchResponse
   private val consumerMetadataRequest = SerializationTestUtils.createConsumerMetadataRequest
   private val consumerMetadataResponse = SerializationTestUtils.createConsumerMetadataResponse
-  private val consumerMetadataResponseNoCoordinator = ConsumerMetadataResponse(None, ErrorMapping.ConsumerCoordinatorNotAvailableCode, 0)
+  private val consumerMetadataResponseNoCoordinator = GroupCoordinatorResponse(None, ErrorMapping.ConsumerCoordinatorNotAvailableCode, 0)
   private val updateMetadataRequestV0 = SerializationTestUtils.createUpdateMetadataRequest(0)
   private val updateMetadataRequestV1 = SerializationTestUtils.createUpdateMetadataRequest(1)
   private val updateMetdataResponse = SerializationTestUtils.createUpdateMetadataResponse
@@ -303,5 +306,40 @@ class RequestResponseSerializationTest extends JUnitSuite {
                   buffer.hasRemaining)
       assertEquals("The original and deserialized for " + original.getClass.getSimpleName + " should be the same.", original, deserialized)
     }
+  }
+
+  @Test
+  def testProduceResponseVersion() {
+    val oldClientResponse = ProducerResponse(1, Map(
+      TopicAndPartition("t1", 0) -> ProducerResponseStatus(0.toShort, 10001),
+      TopicAndPartition("t2", 0) -> ProducerResponseStatus(0.toShort, 20001)
+    ))
+
+    val newClientResponse = ProducerResponse(1, Map(
+      TopicAndPartition("t1", 0) -> ProducerResponseStatus(0.toShort, 10001),
+      TopicAndPartition("t2", 0) -> ProducerResponseStatus(0.toShort, 20001)
+    ), 1, 100)
+
+    // new response should have 4 bytes more than the old response since delayTime is an INT32
+    assertEquals(oldClientResponse.sizeInBytes + 4, newClientResponse.sizeInBytes)
+
+    val buffer = ByteBuffer.allocate(newClientResponse.sizeInBytes)
+    newClientResponse.writeTo(buffer)
+    buffer.rewind()
+    assertEquals(ProducerResponse.readFrom(buffer).throttleTime, 100)
+  }
+
+  @Test
+  def testFetchResponseVersion() {
+    val oldClientResponse = FetchResponse(1, Map(
+      TopicAndPartition("t1", 0) -> new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("first message".getBytes)))
+    ), 0)
+
+    val newClientResponse = FetchResponse(1, Map(
+      TopicAndPartition("t1", 0) -> new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("first message".getBytes)))
+    ), 1, 100)
+
+    // new response should have 4 bytes more than the old response since delayTime is an INT32
+    assertEquals(oldClientResponse.sizeInBytes + 4, newClientResponse.sizeInBytes)
   }
 }

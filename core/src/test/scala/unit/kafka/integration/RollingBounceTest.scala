@@ -17,18 +17,19 @@
 
 package kafka.integration
 
-import org.scalatest.junit.JUnit3Suite
+import org.junit.{Test, After, Before}
 import kafka.zk.ZooKeeperTestHarness
 import kafka.utils.TestUtils._
-import junit.framework.Assert._
+import org.junit.Assert._
 import kafka.utils.{CoreUtils, TestUtils}
 import kafka.server.{KafkaConfig, KafkaServer}
 
-class RollingBounceTest extends JUnit3Suite with ZooKeeperTestHarness {
+class RollingBounceTest extends ZooKeeperTestHarness {
 
   val partitionId = 0
   var servers: Seq[KafkaServer] = null
 
+  @Before
   override def setUp() {
     super.setUp()
     // controlled.shutdown.enable is true by default
@@ -39,12 +40,14 @@ class RollingBounceTest extends JUnit3Suite with ZooKeeperTestHarness {
     servers = configs.map(c => TestUtils.createServer(KafkaConfig.fromProps(c)))
   }
 
+  @After
   override def tearDown() {
     servers.foreach(_.shutdown())
     servers.foreach(server => CoreUtils.rm(server.config.logDirs))
     super.tearDown()
   }
 
+  @Test
   def testRollingBounce {
     // start all the brokers
     val topic1 = "new-topic1"
@@ -53,10 +56,10 @@ class RollingBounceTest extends JUnit3Suite with ZooKeeperTestHarness {
     val topic4 = "new-topic4"
 
     // create topics with 1 partition, 2 replicas, one on each broker
-    createTopic(zkClient, topic1, partitionReplicaAssignment = Map(0->Seq(0,1)), servers = servers)
-    createTopic(zkClient, topic2, partitionReplicaAssignment = Map(0->Seq(1,2)), servers = servers)
-    createTopic(zkClient, topic3, partitionReplicaAssignment = Map(0->Seq(2,3)), servers = servers)
-    createTopic(zkClient, topic4, partitionReplicaAssignment = Map(0->Seq(0,3)), servers = servers)
+    createTopic(zkUtils, topic1, partitionReplicaAssignment = Map(0->Seq(0,1)), servers = servers)
+    createTopic(zkUtils, topic2, partitionReplicaAssignment = Map(0->Seq(1,2)), servers = servers)
+    createTopic(zkUtils, topic3, partitionReplicaAssignment = Map(0->Seq(2,3)), servers = servers)
+    createTopic(zkUtils, topic4, partitionReplicaAssignment = Map(0->Seq(0,3)), servers = servers)
 
     // Do a rolling bounce and check if leader transitions happen correctly
 
@@ -83,7 +86,7 @@ class RollingBounceTest extends JUnit3Suite with ZooKeeperTestHarness {
       servers((startIndex + 1) % 4).shutdown()
       prevLeader = (startIndex + 1) % 4
     }
-    var newleader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId)
+    var newleader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId)
     // Ensure the new leader is different from the old
     assertTrue("Leader transition did not happen for " + topic, newleader.getOrElse(-1) != -1 && (newleader.getOrElse(-1) != prevLeader))
     // Start the server back up again

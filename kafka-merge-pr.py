@@ -65,7 +65,9 @@ TEMP_BRANCH_PREFIX = "PR_TOOL"
 # TODO Introduce a convention as this is too brittle
 RELEASE_BRANCH_PREFIX = "0."
 
-DEV_BRANCH_NAME="trunk"
+DEV_BRANCH_NAME = "trunk"
+
+DEFAULT_FIX_VERSION = os.environ.get("DEFAULT_FIX_VERSION", "0.9.1.0")
 
 def get_json(url):
     try:
@@ -95,8 +97,9 @@ def continue_maybe(prompt):
         fail("Okay, exiting")
 
 def clean_up():
-    print "Restoring head pointer to %s" % original_head
-    run_cmd("git checkout %s" % original_head)
+    if original_head != get_current_branch():
+        print "Restoring head pointer to %s" % original_head
+        run_cmd("git checkout %s" % original_head)
 
     branches = run_cmd("git branch").replace(" ", "").split("\n")
 
@@ -104,6 +107,8 @@ def clean_up():
         print "Deleting local branch %s" % branch
         run_cmd("git branch -D %s" % branch)
 
+def get_current_branch():
+    return run_cmd("git rev-parse --abbrev-ref HEAD").replace("\n", "")
 
 # merge the requested PR and return the merge hash
 def merge_pr(pr_num, target_ref, title, body, pr_repo_desc):
@@ -127,9 +132,26 @@ def merge_pr(pr_num, target_ref, title, body, pr_repo_desc):
                              '--pretty=format:%an <%ae>']).split("\n")
     distinct_authors = sorted(set(commit_authors),
                               key=lambda x: commit_authors.count(x), reverse=True)
-    primary_author = distinct_authors[0]
+    primary_author = raw_input(
+        "Enter primary author in the format of \"name <email>\" [%s]: " %
+        distinct_authors[0])
+    if primary_author == "":
+        primary_author = distinct_authors[0]
+
+    reviewers = raw_input(
+        "Enter reviewers in the format of \"name1 <email1>, name2 <email2>\": ").strip()
+
     commits = run_cmd(['git', 'log', 'HEAD..%s' % pr_branch_name,
-                      '--pretty=format:%h [%an] %s']).split("\n\n")
+                      '--pretty=format:%h [%an] %s']).split("\n")
+    
+    if len(commits) > 1:
+        result = raw_input("List pull request commits in squashed commit message? (y/n): ")
+        if result.lower() == "y":
+          should_list_commits = True
+        else:
+          should_list_commits = False
+    else:
+        should_list_commits = False
 
     merge_message_flags = []
 
@@ -143,6 +165,9 @@ def merge_pr(pr_num, target_ref, title, body, pr_repo_desc):
 
     merge_message_flags += ["-m", authors]
 
+    if (reviewers != ""):
+        merge_message_flags += ["-m", "Reviewers: %s" % reviewers]
+
     if had_conflicts:
         committer_name = run_cmd("git config --get user.name").strip()
         committer_email = run_cmd("git config --get user.email").strip()
@@ -151,11 +176,13 @@ def merge_pr(pr_num, target_ref, title, body, pr_repo_desc):
         merge_message_flags += ["-m", message]
 
     # The string "Closes #%s" string is required for GitHub to correctly close the PR
-    merge_message_flags += [
-        "-m",
-        "Closes #%s from %s and squashes the following commits:" % (pr_num, pr_repo_desc)]
-    for c in commits:
-        merge_message_flags += ["-m", c]
+    close_line = "Closes #%s from %s" % (pr_num, pr_repo_desc)
+    if should_list_commits:
+        close_line += " and squashes the following commits:"
+    merge_message_flags += ["-m", close_line]
+
+    if should_list_commits:
+        merge_message_flags += ["-m", "\n".join(commits)]
 
     run_cmd(['git', 'commit', '--author="%s"' % primary_author] + merge_message_flags)
 
@@ -213,9 +240,17 @@ def cherry_pick(pr_num, merge_hash, default_branch):
 def fix_version_from_branch(branch, versions):
     # Note: Assumes this is a sorted (newest->oldest) list of un-released versions
     if branch == DEV_BRANCH_NAME:
-        return versions[0]
+        versions = filter(lambda x: x == DEFAULT_FIX_VERSION, versions)
+        if len(versions) > 0:
+            return versions[0]
+        else:
+            return None
     else:
-        return filter(lambda x: x.name.startswith(branch), versions)[-1]
+        versions = filter(lambda x: x.startswith(branch), versions)
+        if len(versions) > 0:
+            return versions[-1]
+        else:
+            return None
 
 
 def resolve_jira_issue(merge_branches, comment, default_jira_id=""):
@@ -248,20 +283,10 @@ def resolve_jira_issue(merge_branches, comment, default_jira_id=""):
     versions = asf_jira.project_versions(CAPITALIZED_PROJECT_NAME)
     versions = sorted(versions, key=lambda x: x.name, reverse=True)
     versions = filter(lambda x: x.raw['released'] is False, versions)
-    # Consider only x.y.z versions
-    versions = filter(lambda x: re.match('\d+\.\d+\.\d+', x.name), versions)
 
-    default_fix_versions = map(lambda x: fix_version_from_branch(x, versions).name, merge_branches)
-    for v in default_fix_versions:
-        # Handles the case where we have forked a release branch but not yet made the release.
-        # In this case, if the PR is committed to the master branch and the release branch, we
-        # only consider the release branch to be the fix version. E.g. it is not valid to have
-        # both 1.1.0 and 1.0.0 as fix versions.
-        (major, minor, patch) = v.split(".")
-        if patch == "0":
-            previous = "%s.%s.%s" % (major, int(minor) - 1, 0)
-            if previous in default_fix_versions:
-                default_fix_versions = filter(lambda x: x != v, default_fix_versions)
+    version_names = map(lambda x: x.name, versions)
+    default_fix_versions = map(lambda x: fix_version_from_branch(x, version_names), merge_branches)
+    default_fix_versions = filter(lambda x: x != None, default_fix_versions)
     default_fix_versions = ",".join(default_fix_versions)
 
     fix_versions = raw_input("Enter comma-separated fix version(s) [%s]: " % default_fix_versions)
@@ -275,7 +300,10 @@ def resolve_jira_issue(merge_branches, comment, default_jira_id=""):
     jira_fix_versions = map(lambda v: get_version_json(v), fix_versions)
 
     resolve = filter(lambda a: a['name'] == "Resolve Issue", asf_jira.transitions(jira_id))[0]
-    asf_jira.transition_issue(jira_id, resolve["id"], fixVersions=jira_fix_versions, comment=comment)
+    resolution = filter(lambda r: r.raw['name'] == "Fixed", asf_jira.resolutions())[0]
+    asf_jira.transition_issue(
+        jira_id, resolve["id"], fixVersions = jira_fix_versions,
+        comment = comment, resolution = {'id': resolution.raw['id']})
 
     print "Successfully resolved %s with fixVersions=%s!" % (jira_id, fix_versions)
 
@@ -350,7 +378,7 @@ def standardize_jira_ref(text):
 def main():
     global original_head
 
-    original_head = run_cmd("git rev-parse HEAD")[:8]
+    original_head = get_current_branch()
 
     branches = get_json("%s/branches" % GITHUB_API_BASE)
     branch_names = filter(lambda x: x.startswith(RELEASE_BRANCH_PREFIX), [x['name'] for x in branches])
@@ -363,22 +391,24 @@ def main():
 
     url = pr["url"]
 
+    pr_title = pr["title"]
+    commit_title = raw_input("Commit title [%s]: " % pr_title.encode("utf-8")).decode("utf-8")
+    if commit_title == "":
+        commit_title = pr_title
+
     # Decide whether to use the modified title or not
-    modified_title = standardize_jira_ref(pr["title"])
-    if modified_title != pr["title"]:
+    modified_title = standardize_jira_ref(commit_title)
+    if modified_title != commit_title:
         print "I've re-written the title as follows to match the standard format:"
-        print "Original: %s" % pr["title"]
+        print "Original: %s" % commit_title
         print "Modified: %s" % modified_title
         result = raw_input("Would you like to use the modified title? (y/n): ")
         if result.lower() == "y":
-            title = modified_title
+            commit_title = modified_title
             print "Using modified title:"
         else:
-            title = pr["title"]
             print "Using original title:"
-        print title
-    else:
-        title = pr["title"]
+        print commit_title
 
     body = pr["body"]
     target_ref = pr["base"]["ref"]
@@ -411,13 +441,13 @@ def main():
         continue_maybe(msg)
 
     print ("\n=== Pull Request #%s ===" % pr_num)
-    print ("title\t%s\nsource\t%s\ntarget\t%s\nurl\t%s" % (
-        title, pr_repo_desc, target_ref, url))
+    print ("PR title\t%s\nCommit title\t%s\nSource\t\t%s\nTarget\t\t%s\nURL\t\t%s" % (
+        pr_title, commit_title, pr_repo_desc, target_ref, url))
     continue_maybe("Proceed with merging pull request #%s?" % pr_num)
 
     merged_refs = [target_ref]
 
-    merge_hash = merge_pr(pr_num, target_ref, title, body, pr_repo_desc)
+    merge_hash = merge_pr(pr_num, target_ref, commit_title, body, pr_repo_desc)
 
     pick_prompt = "Would you like to pick %s into another branch?" % merge_hash
     while raw_input("\n%s (y/n): " % pick_prompt).lower() == "y":
@@ -427,16 +457,18 @@ def main():
         if JIRA_USERNAME and JIRA_PASSWORD:
             continue_maybe("Would you like to update an associated JIRA?")
             jira_comment = "Issue resolved by pull request %s\n[%s/%s]" % (pr_num, GITHUB_BASE, pr_num)
-            resolve_jira_issues(title, merged_refs, jira_comment)
+            resolve_jira_issues(commit_title, merged_refs, jira_comment)
         else:
             print "JIRA_USERNAME and JIRA_PASSWORD not set"
             print "Exiting without trying to close the associated JIRA."
     else:
-        print "Could not find jira-python library. Run 'sudo pip install jira-python' to install."
+        print "Could not find jira-python library. Run 'sudo pip install jira' to install."
         print "Exiting without trying to close the associated JIRA."
 
 if __name__ == "__main__":
     import doctest
-    doctest.testmod()
+    (failure_count, test_count) = doctest.testmod()
+    if (failure_count):
+        exit(-1)
 
     main()

@@ -17,19 +17,20 @@
 
 package kafka.log
 
-import java.util.Properties
-
-import junit.framework.Assert._
-import org.scalatest.junit.JUnitSuite
-import org.junit.{After, Test}
-import java.nio._
 import java.io.File
-import scala.collection._
-import kafka.common._
-import kafka.utils._
-import kafka.message._
+import java.nio._
+import java.util.Properties
 import java.util.concurrent.atomic.AtomicLong
+
+import kafka.common._
+import kafka.message._
+import kafka.utils._
 import org.apache.kafka.common.utils.Utils
+import org.junit.Assert._
+import org.junit.{After, Test}
+import org.scalatest.junit.JUnitSuite
+
+import scala.collection._
 
 /**
  * Unit tests for the log cleaning logic
@@ -106,6 +107,24 @@ class CleanerTest extends JUnitSuite {
   }
 
   @Test
+  def testLogToClean: Unit = {
+    // create a log with small segment size
+    val logProps = new Properties()
+    logProps.put(LogConfig.SegmentBytesProp, 100: java.lang.Integer)
+    val log = makeLog(config = LogConfig.fromProps(logConfig.originals, logProps))
+
+    // create 6 segments with only one message in each segment
+    val messageSet = TestUtils.singleMessageSet(payload = Array.fill[Byte](50)(0), key = 1.toString.getBytes)
+    for (i <- 0 until 6)
+      log.append(messageSet, assignOffsets = true)
+
+    val logToClean = LogToClean(TopicAndPartition("test", 0), log, log.activeSegment.baseOffset)
+
+    assertEquals("Total bytes of LogToClean should equal size of all segments excluding the active segment",
+      logToClean.totalBytes, log.size - log.activeSegment.size)
+  }
+
+  @Test
   def testCleaningWithUnkeyedMessages {
     val cleaner = makeCleaner(Int.MaxValue)
 
@@ -128,11 +147,6 @@ class CleanerTest extends JUnitSuite {
       log.append(message(log.logEndOffset.toInt, log.logEndOffset.toInt))
 
     val expectedSizeAfterCleaning = log.size - sizeWithUnkeyedMessages
-
-    // turn on compaction and compact the log
-    logProps.put(LogConfig.SegmentBytesProp, 1024: java.lang.Integer)
-
-    val compactedLog = makeLog(config = LogConfig.fromProps(logConfig.originals, logProps))
     cleaner.clean(LogToClean(TopicAndPartition("test", 0), log, 0))
 
     assertEquals("Log should only contain keyed messages after cleaning.", 0, unkeyedMessageCountInLog(log))

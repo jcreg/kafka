@@ -34,24 +34,33 @@ import org.apache.kafka.common.utils.Time;
  * A mock network client for use testing code
  */
 public class MockClient implements KafkaClient {
+    public static final RequestMatcher ALWAYS_TRUE = new RequestMatcher() {
+        @Override
+        public boolean matches(ClientRequest request) {
+            return true;
+        }
+    };
 
     private class FutureResponse {
         public final Struct responseBody;
         public final boolean disconnected;
+        public final RequestMatcher requestMatcher;
 
-        public FutureResponse(Struct responseBody, boolean disconnected) {
+        public FutureResponse(Struct responseBody, boolean disconnected, RequestMatcher requestMatcher) {
             this.responseBody = responseBody;
             this.disconnected = disconnected;
+            this.requestMatcher = requestMatcher;
         }
+
     }
 
     private final Time time;
     private int correlation = 0;
     private Node node = null;
-    private final Set<Integer> ready = new HashSet<Integer>();
-    private final Queue<ClientRequest> requests = new ArrayDeque<ClientRequest>();
-    private final Queue<ClientResponse> responses = new ArrayDeque<ClientResponse>();
-    private final Queue<FutureResponse> futureResponses = new ArrayDeque<FutureResponse>();
+    private final Set<Integer> ready = new HashSet<>();
+    private final Queue<ClientRequest> requests = new ArrayDeque<>();
+    private final Queue<ClientResponse> responses = new ArrayDeque<>();
+    private final Queue<FutureResponse> futureResponses = new ArrayDeque<>();
 
     public MockClient(Time time) {
         this.time = time;
@@ -79,11 +88,12 @@ public class MockClient implements KafkaClient {
     }
 
     public void disconnect(String node) {
+        long now = time.milliseconds();
         Iterator<ClientRequest> iter = requests.iterator();
         while (iter.hasNext()) {
             ClientRequest request = iter.next();
             if (request.request().destination() == node) {
-                responses.add(new ClientResponse(request, time.milliseconds(), true, null));
+                responses.add(new ClientResponse(request, now, true, null));
                 iter.remove();
             }
         }
@@ -91,12 +101,16 @@ public class MockClient implements KafkaClient {
     }
 
     @Override
-    public void send(ClientRequest request) {
+    public void send(ClientRequest request, long now) {
         if (!futureResponses.isEmpty()) {
             FutureResponse futureResp = futureResponses.poll();
+            if (!futureResp.requestMatcher.matches(request))
+                throw new IllegalStateException("Next in line response did not match expected request");
+
             ClientResponse resp = new ClientResponse(request, time.milliseconds(), futureResp.disconnected, futureResp.responseBody);
             responses.add(resp);
         } else {
+            request.setSendTimeMs(now);
             this.requests.add(request);
         }
     }
@@ -114,19 +128,6 @@ public class MockClient implements KafkaClient {
         return copy;
     }
 
-    @Override
-    public List<ClientResponse> completeAll(String node, long now) {
-        return completeAll(now);
-    }
-
-    @Override
-    public List<ClientResponse> completeAll(long now) {
-        List<ClientResponse> responses = poll(0, now);
-        if (requests.size() > 0)
-            throw new IllegalStateException("Requests without responses remain.");
-        return responses;
-    }
-
     public Queue<ClientRequest> requests() {
         return this.requests;
     }
@@ -141,11 +142,32 @@ public class MockClient implements KafkaClient {
     }
 
     public void prepareResponse(Struct body) {
-        prepareResponse(body, false);
+        prepareResponse(ALWAYS_TRUE, body, false);
+    }
+
+    /**
+     * Prepare a response for a request matching the provided matcher. If the matcher does not
+     * match, {@link #send(ClientRequest, long)} will throw IllegalStateException
+     * @param matcher The matcher to apply
+     * @param body The response body
+     */
+    public void prepareResponse(RequestMatcher matcher, Struct body) {
+        prepareResponse(matcher, body, false);
     }
 
     public void prepareResponse(Struct body, boolean disconnected) {
-        futureResponses.add(new FutureResponse(body, disconnected));
+        prepareResponse(ALWAYS_TRUE, body, disconnected);
+    }
+
+    /**
+     * Prepare a response for a request matching the provided matcher. If the matcher does not
+     * match, {@link #send(ClientRequest, long)} will throw IllegalStateException
+     * @param matcher The matcher to apply
+     * @param body The response body
+     * @param disconnected Whether the request was disconnected
+     */
+    public void prepareResponse(RequestMatcher matcher, Struct body, boolean disconnected) {
+        futureResponses.add(new FutureResponse(body, disconnected, matcher));
     }
 
     public void setNode(Node node) {
@@ -168,6 +190,11 @@ public class MockClient implements KafkaClient {
     }
 
     @Override
+    public RequestHeader nextRequestHeader(ApiKeys key, short version) {
+        return new RequestHeader(key.id, version, "mock", correlation++);
+    }
+
+    @Override
     public void wakeup() {
     }
 
@@ -176,8 +203,23 @@ public class MockClient implements KafkaClient {
     }
 
     @Override
+    public void close(String nodeId) {
+        ready.remove(Integer.valueOf(nodeId));
+    }
+
+    @Override
     public Node leastLoadedNode(long now) {
         return this.node;
+    }
+
+    /**
+     * The RequestMatcher provides a way to match a particular request to a response prepared
+     * through {@link #prepareResponse(RequestMatcher, Struct)}. Basically this allows testers
+     * to inspect the request body for the type of the request or for specific fields that should be set,
+     * and to fail the test if it doesn't match.
+     */
+    public interface RequestMatcher {
+        boolean matches(ClientRequest request);
     }
 
 }

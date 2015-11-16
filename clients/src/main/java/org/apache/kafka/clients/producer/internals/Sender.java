@@ -30,6 +30,7 @@ import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidMetadataException;
 import org.apache.kafka.common.errors.RetriableException;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
 import org.apache.kafka.common.metrics.Measurable;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.MetricName;
@@ -71,9 +72,6 @@ public class Sender implements Runnable {
     /* the number of acknowledgements to request from the server */
     private final short acks;
 
-    /* the max time in ms for the server to wait for acknowlegements */
-    private final int requestTimeout;
-
     /* the number of times to retry a failed request before giving up */
     private final int retries;
 
@@ -92,27 +90,30 @@ public class Sender implements Runnable {
     /* param clientId of the client */
     private String clientId;
 
+    /* the max time to wait for the server to respond to the request*/
+    private final int requestTimeout;
+
     public Sender(KafkaClient client,
                   Metadata metadata,
                   RecordAccumulator accumulator,
                   int maxRequestSize,
                   short acks,
                   int retries,
-                  int requestTimeout,
                   Metrics metrics,
                   Time time,
-                  String clientId) {
+                  String clientId,
+                  int requestTimeout) {
         this.client = client;
         this.accumulator = accumulator;
         this.metadata = metadata;
         this.maxRequestSize = maxRequestSize;
         this.running = true;
-        this.requestTimeout = requestTimeout;
         this.acks = acks;
         this.retries = retries;
         this.time = time;
         this.clientId = clientId;
         this.sensors = new SenderMetrics(metrics);
+        this.requestTimeout = requestTimeout;
     }
 
     /**
@@ -187,6 +188,12 @@ public class Sender implements Runnable {
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
                                                                          now);
+
+        List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, cluster, now);
+        // update sensors
+        for (RecordBatch expiredBatch : expiredBatches)
+            this.sensors.recordErrors(expiredBatch.topicPartition.topic(), expiredBatch.recordCount);
+
         sensors.updateProduceRequestMetrics(batches);
         List<ClientRequest> requests = createProduceRequests(batches, now);
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
@@ -200,7 +207,7 @@ public class Sender implements Runnable {
             pollTimeout = 0;
         }
         for (ClientRequest request : requests)
-            client.send(request);
+            client.send(request, now);
 
         // if some partitions are already ready to be sent, the select time would be 0;
         // otherwise if some partition already has some data accumulated but not ready yet,
@@ -253,6 +260,8 @@ public class Sender implements Runnable {
                     completeBatch(batch, error, partResp.baseOffset, correlationId, now);
                 }
                 this.sensors.recordLatency(response.request().request().destination(), response.requestLatencyMs());
+                this.sensors.recordThrottleTime(response.request().request().destination(),
+                                                produceResponse.getThrottleTime());
             } else {
                 // this is the acks = 0 case, just complete all requests
                 for (RecordBatch batch : batches.values())
@@ -280,6 +289,8 @@ public class Sender implements Runnable {
                      error);
             this.accumulator.reenqueue(batch, now);
             this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
+        } else if (error == Errors.TOPIC_AUTHORIZATION_FAILED) {
+            batch.done(baseOffset, new TopicAuthorizationException(batch.topicPartition.topic()));
         } else {
             // tell the user the result of their request
             batch.done(baseOffset, error.exception());
@@ -316,7 +327,7 @@ public class Sender implements Runnable {
         final Map<TopicPartition, RecordBatch> recordsByPartition = new HashMap<TopicPartition, RecordBatch>(batches.size());
         for (RecordBatch batch : batches) {
             TopicPartition tp = batch.topicPartition;
-            produceRecordsByPartition.put(tp, (ByteBuffer) batch.records.buffer().flip());
+            produceRecordsByPartition.put(tp, batch.records.buffer());
             recordsByPartition.put(tp, batch);
         }
         ProduceRequest request = new ProduceRequest(acks, timeout, produceRecordsByPartition);
@@ -352,6 +363,7 @@ public class Sender implements Runnable {
         public final Sensor batchSizeSensor;
         public final Sensor compressionRateSensor;
         public final Sensor maxRecordSizeSensor;
+        public final Sensor produceThrottleTimeSensor;
 
         public SenderMetrics(Metrics metrics) {
             this.metrics = metrics;
@@ -380,6 +392,12 @@ public class Sender implements Runnable {
             this.requestTimeSensor.add(m, new Avg());
             m = new MetricName("request-latency-max", metricGrpName, "The maximum request latency in ms", metricTags);
             this.requestTimeSensor.add(m, new Max());
+
+            this.produceThrottleTimeSensor = metrics.sensor("produce-throttle-time");
+            m = new MetricName("produce-throttle-time-avg", metricGrpName, "The average throttle time in ms", metricTags);
+            this.produceThrottleTimeSensor.add(m, new Avg());
+            m = new MetricName("produce-throttle-time-max", metricGrpName, "The maximum throttle time in ms", metricTags);
+            this.produceThrottleTimeSensor.add(m, new Max());
 
             this.recordsPerRequestSensor = metrics.sensor("records-per-request");
             m = new MetricName("record-send-rate", metricGrpName, "The average number of records sent per second.", metricTags);
@@ -515,6 +533,11 @@ public class Sender implements Runnable {
                     nodeRequestTime.record(latency, now);
             }
         }
+
+        public void recordThrottleTime(String node, long throttleTimeMs) {
+            this.produceThrottleTimeSensor.record(throttleTimeMs, time.milliseconds());
+        }
+
     }
 
 }

@@ -18,7 +18,8 @@
 package kafka.consumer
 
 
-import java.nio.channels.ClosedByInterruptException
+import java.nio.channels.{AsynchronousCloseException, ClosedByInterruptException}
+import java.util.concurrent.TimeUnit
 
 import kafka.api._
 import kafka.network._
@@ -59,6 +60,16 @@ class SimpleConsumer(val host: String,
     connect()
   }
 
+  /**
+   * Unblock thread by closing channel and triggering AsynchronousCloseException if a read operation is in progress.
+   *
+   * This handles a bug found in Java 1.7 and below, where interrupting a thread can not correctly unblock
+   * the thread from waiting on ReadableByteChannel.read().
+   */
+  def disconnectToHandleJavaIOBug() = {
+    disconnect()
+  }
+
   def close() {
     lock synchronized {
       disconnect()
@@ -75,6 +86,9 @@ class SimpleConsumer(val host: String,
         response = blockingChannel.receive()
       } catch {
         case e : ClosedByInterruptException =>
+          throw e
+        // Should not observe this exception when running Kafka with Java 1.8
+        case e: AsynchronousCloseException =>
           throw e
         case e : Throwable =>
           info("Reconnect due to socket error: %s".format(e.toString))
@@ -98,9 +112,9 @@ class SimpleConsumer(val host: String,
     TopicMetadataResponse.readFrom(response.payload())
   }
 
-  def send(request: ConsumerMetadataRequest): ConsumerMetadataResponse = {
+  def send(request: GroupCoordinatorRequest): GroupCoordinatorResponse = {
     val response = sendRequest(request)
-    ConsumerMetadataResponse.readFrom(response.payload())
+    GroupCoordinatorResponse.readFrom(response.payload())
   }
 
   /**
@@ -118,10 +132,12 @@ class SimpleConsumer(val host: String,
         response = sendRequest(request)
       }
     }
-    val fetchResponse = FetchResponse.readFrom(response.payload())
+    val fetchResponse = FetchResponse.readFrom(response.payload(), request.versionId)
     val fetchedSize = fetchResponse.sizeInBytes
     fetchRequestAndResponseStats.getFetchRequestAndResponseStats(host, port).requestSizeHist.update(fetchedSize)
     fetchRequestAndResponseStats.getFetchRequestAndResponseAllBrokersStats.requestSizeHist.update(fetchedSize)
+    fetchRequestAndResponseStats.getFetchRequestAndResponseStats(host, port).throttleTimeStats.update(fetchResponse.throttleTimeMs, TimeUnit.MILLISECONDS)
+    fetchRequestAndResponseStats.getFetchRequestAndResponseAllBrokersStats.throttleTimeStats.update(fetchResponse.throttleTimeMs, TimeUnit.MILLISECONDS)
     fetchResponse
   }
 

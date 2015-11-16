@@ -27,10 +27,10 @@ import kafka.serializer.StringEncoder
 
 import java.io.File
 
-import org.scalatest.junit.JUnit3Suite
+import org.junit.{Test, After, Before}
 import org.junit.Assert._
 
-class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
+class LogRecoveryTest extends ZooKeeperTestHarness {
 
   val replicaLagTimeMaxMs = 5000L
   val replicaLagMaxMessages = 10L
@@ -69,6 +69,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
       keyEncoder = classOf[IntEncoder].getName)
   }
 
+  @Before
   override def setUp() {
     super.setUp()
 
@@ -80,12 +81,13 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     servers = List(server1, server2)
 
     // create topic with 1 partition, 2 replicas, one on each broker
-    createTopic(zkClient, topic, partitionReplicaAssignment = Map(0->Seq(0,1)), servers = servers)
+    createTopic(zkUtils, topic, partitionReplicaAssignment = Map(0->Seq(0,1)), servers = servers)
 
     // create the producer
     updateProducer()
   }
 
+  @After
   override def tearDown() {
     producer.close()
     for(server <- servers) {
@@ -95,6 +97,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     super.tearDown()
   }
 
+  @Test
   def testHWCheckpointNoFailuresSingleLogSegment {
     val numMessages = 2L
     sendMessages(numMessages.toInt)
@@ -111,8 +114,9 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     assertEquals(numMessages, followerHW)
   }
 
+  @Test
   def testHWCheckpointWithFailuresSingleLogSegment {
-    var leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId)
+    var leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId)
 
     assertEquals(0L, hwFile1.read.getOrElse(TopicAndPartition(topic, 0), 0L))
 
@@ -125,7 +129,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     assertEquals(hw, hwFile1.read.getOrElse(TopicAndPartition(topic, 0), 0L))
 
     // check if leader moves to the other server
-    leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId, oldLeaderOpt = leader)
+    leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId, oldLeaderOpt = leader)
     assertEquals("Leader must move to broker 1", 1, leader.getOrElse(-1))
 
     // bring the preferred replica back
@@ -133,7 +137,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     // Update producer with new server settings
     updateProducer()
 
-    leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId)
+    leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId)
     assertTrue("Leader must remain on broker 1, in case of zookeeper session expiration it can move to broker 0",
       leader.isDefined && (leader.get == 0 || leader.get == 1))
 
@@ -144,7 +148,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
 
     server2.startup()
     updateProducer()
-    leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId, oldLeaderOpt = leader)
+    leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId, oldLeaderOpt = leader)
     assertTrue("Leader must remain on broker 0, in case of zookeeper session expiration it can move to broker 1",
       leader.isDefined && (leader.get == 0 || leader.get == 1))
 
@@ -161,6 +165,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     assertEquals(hw, hwFile2.read.getOrElse(TopicAndPartition(topic, 0), 0L))
   }
 
+  @Test
   def testHWCheckpointNoFailuresMultipleLogSegments {
     sendMessages(20)
     val hw = 20L
@@ -176,8 +181,9 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     assertEquals(hw, followerHW)
   }
 
+  @Test
   def testHWCheckpointWithFailuresMultipleLogSegments {
-    var leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId)
+    var leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId)
 
     sendMessages(2)
     var hw = 2L
@@ -195,7 +201,7 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     server2.startup()
     updateProducer()
     // check if leader moves to the other server
-    leader = waitUntilLeaderIsElectedOrChanged(zkClient, topic, partitionId, oldLeaderOpt = leader)
+    leader = waitUntilLeaderIsElectedOrChanged(zkUtils, topic, partitionId, oldLeaderOpt = leader)
     assertEquals("Leader must move to broker 1", 1, leader.getOrElse(-1))
 
     assertEquals(hw, hwFile1.read.getOrElse(TopicAndPartition(topic, 0), 0L))
@@ -210,6 +216,9 @@ class LogRecoveryTest extends JUnit3Suite with ZooKeeperTestHarness {
     sendMessages(2)
     hw += 2
 
+    // allow some time for the follower to create replica
+    TestUtils.waitUntilTrue(() => server1.replicaManager.getReplica(topic, 0).nonEmpty,
+      "Failed to create replica in follower after timeout")
     // allow some time for the follower to get the leader HW
     TestUtils.waitUntilTrue(() =>
       server1.replicaManager.getReplica(topic, 0).get.highWatermark.messageOffset == hw,

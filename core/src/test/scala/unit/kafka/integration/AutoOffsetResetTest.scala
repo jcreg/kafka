@@ -24,12 +24,11 @@ import kafka.utils.TestUtils
 import kafka.serializer._
 import kafka.producer.{Producer, KeyedMessage}
 
-import org.junit.Test
+import org.junit.{After, Before, Test}
 import org.apache.log4j.{Level, Logger}
-import org.scalatest.junit.JUnit3Suite
-import junit.framework.Assert._
+import org.junit.Assert._
 
-class AutoOffsetResetTest extends JUnit3Suite with KafkaServerTestHarness with Logging {
+class AutoOffsetResetTest extends KafkaServerTestHarness with Logging {
 
   def generateConfigs() = List(KafkaConfig.fromProps(TestUtils.createBrokerConfig(0, zkConnect)))
 
@@ -42,12 +41,14 @@ class AutoOffsetResetTest extends JUnit3Suite with KafkaServerTestHarness with L
   
   val requestHandlerLogger = Logger.getLogger(classOf[kafka.server.KafkaRequestHandler])
 
+  @Before
   override def setUp() {
     super.setUp()
     // temporarily set request handler logger to a higher level
     requestHandlerLogger.setLevel(Level.FATAL)
   }
 
+  @After
   override def tearDown() {
     // restore set request handler logger to a higher level
     requestHandlerLogger.setLevel(Level.ERROR)
@@ -75,7 +76,7 @@ class AutoOffsetResetTest extends JUnit3Suite with KafkaServerTestHarness with L
    * Returns the count of messages received.
    */
   def resetAndConsume(numMessages: Int, resetTo: String, offset: Long): Int = {
-    TestUtils.createTopic(zkClient, topic, 1, 1, servers)
+    TestUtils.createTopic(zkUtils, topic, 1, 1, servers)
 
     val producer: Producer[String, Array[Byte]] = TestUtils.createProducer(
       TestUtils.getBrokerListStrFromServers(servers),

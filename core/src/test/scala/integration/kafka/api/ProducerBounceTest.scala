@@ -22,7 +22,7 @@ import kafka.utils.{ShutdownableThread, TestUtils}
 import org.apache.kafka.clients.producer._
 import org.apache.kafka.clients.producer.internals.ErrorLoggingCallback
 import org.junit.Assert._
-import org.junit.Test
+import org.junit.{After, Before, Test}
 
 class ProducerBounceTest extends KafkaServerTestHarness {
   private val producerBufferSize = 30000
@@ -62,6 +62,7 @@ class ProducerBounceTest extends KafkaServerTestHarness {
   private val topic1 = "topic-1"
   private val topic2 = "topic-2"
 
+  @Before
   override def setUp() {
     super.setUp()
 
@@ -70,6 +71,7 @@ class ProducerBounceTest extends KafkaServerTestHarness {
     producer3 = TestUtils.createNewProducer(brokerList, acks = -1, blockOnBufferFull = false, bufferSize = producerBufferSize)
   }
 
+  @After
   override def tearDown() {
     if (producer1 != null) producer1.close
     if (producer2 != null) producer2.close
@@ -85,7 +87,7 @@ class ProducerBounceTest extends KafkaServerTestHarness {
   @Test
   def testBrokerFailure() {
     val numPartitions = 3
-    val leaders = TestUtils.createTopic(zkClient, topic1, numPartitions, numServers, servers)
+    val leaders = TestUtils.createTopic(zkUtils, topic1, numPartitions, numServers, servers)
     assertTrue("Leader of all partitions of the topic should exist", leaders.values.forall(leader => leader.isDefined))
 
     val scheduler = new ProducerScheduler()
@@ -105,7 +107,7 @@ class ProducerBounceTest extends KafkaServerTestHarness {
       assertTrue(scheduler.failed == false)
 
       // Make sure the leader still exists after bouncing brokers
-      (0 until numPartitions).foreach(partition => TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, topic1, partition))
+      (0 until numPartitions).foreach(partition => TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, topic1, partition))
     }
 
     scheduler.shutdown

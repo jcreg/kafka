@@ -30,16 +30,14 @@ import org.junit._
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import org.junit.runners.Parameterized.Parameters
-import org.scalatest.junit.JUnit3Suite
 
 import scala.collection._
-
 
 /**
  * This is an integration test that tests the fully integrated log cleaner
  */
 @RunWith(value = classOf[Parameterized])
-class LogCleanerIntegrationTest(compressionCodec: String) extends JUnit3Suite {
+class LogCleanerIntegrationTest(compressionCodec: String) {
 
   val time = new MockTime()
   val segmentSize = 100
@@ -58,9 +56,12 @@ class LogCleanerIntegrationTest(compressionCodec: String) extends JUnit3Suite {
     val startSize = log.size
     cleaner.startup()
 
-    val lastCleaned = log.activeSegment.baseOffset
+    val firstDirty = log.activeSegment.baseOffset
     // wait until we clean up to base_offset of active segment - minDirtyMessages
-    cleaner.awaitCleaned("log", 0, lastCleaned)
+    cleaner.awaitCleaned("log", 0, firstDirty)
+
+    val lastCleaned = cleaner.cleanerManager.allCleanerCheckpoints.get(TopicAndPartition("log", 0)).get
+    assertTrue("log cleaner should have processed up to offset " + firstDirty, lastCleaned >= firstDirty);
     
     val read = readFromLog(log)
     assertEquals("Contents of the map shouldn't change.", appends.toMap, read.toMap)
@@ -68,8 +69,12 @@ class LogCleanerIntegrationTest(compressionCodec: String) extends JUnit3Suite {
 
     // write some more stuff and validate again
     val appends2 = appends ++ writeDups(numKeys = 100, numDups = 3, log, CompressionCodec.getCompressionCodec(compressionCodec))
-    val lastCleaned2 = log.activeSegment.baseOffset
-    cleaner.awaitCleaned("log", 0, lastCleaned2)
+    val firstDirty2 = log.activeSegment.baseOffset
+    cleaner.awaitCleaned("log", 0, firstDirty2)
+
+    val lastCleaned2 = cleaner.cleanerManager.allCleanerCheckpoints.get(TopicAndPartition("log", 0)).get
+    assertTrue("log cleaner should have processed up to offset " + firstDirty2, lastCleaned2 >= firstDirty2);
+
     val read2 = readFromLog(log)
     assertEquals("Contents of the map shouldn't change.", appends2.toMap, read2.toMap)
 
@@ -84,7 +89,6 @@ class LogCleanerIntegrationTest(compressionCodec: String) extends JUnit3Suite {
 
     // we expect partition 0 to be gone
     assert(!checkpoints.contains(topics(0)))
-    
     cleaner.shutdown()
   }
 
@@ -113,6 +117,7 @@ class LogCleanerIntegrationTest(compressionCodec: String) extends JUnit3Suite {
     
   @After
   def teardown() {
+    time.scheduler.shutdown()
     CoreUtils.rm(logDir)
   }
   

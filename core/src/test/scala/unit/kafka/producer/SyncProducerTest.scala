@@ -20,7 +20,7 @@ package kafka.producer
 import java.net.SocketTimeoutException
 import java.util.Properties
 
-import junit.framework.Assert
+import org.junit.Assert
 import kafka.admin.AdminUtils
 import kafka.api.ProducerResponseStatus
 import kafka.common.{ErrorMapping, TopicAndPartition}
@@ -30,9 +30,8 @@ import kafka.server.KafkaConfig
 import kafka.utils._
 import org.apache.kafka.common.protocol.SecurityProtocol
 import org.junit.Test
-import org.scalatest.junit.JUnit3Suite
 
-class SyncProducerTest extends JUnit3Suite with KafkaServerTestHarness {
+class SyncProducerTest extends KafkaServerTestHarness {
   private val messageBytes =  new Array[Byte](2)
   // turning off controlled shutdown since testProducerCanTimeout() explicitly shuts down request handler pool.
   def generateConfigs() = List(KafkaConfig.fromProps(TestUtils.createBrokerConfigs(1, zkConnect, false).head))
@@ -98,7 +97,7 @@ class SyncProducerTest extends JUnit3Suite with KafkaServerTestHarness {
     val props = TestUtils.getSyncProducerConfig(server.socketServer.boundPort())
 
     val producer = new SyncProducer(new SyncProducerConfig(props))
-    TestUtils.createTopic(zkClient, "test", numPartitions = 1, replicationFactor = 1, servers = servers)
+    TestUtils.createTopic(zkUtils, "test", numPartitions = 1, replicationFactor = 1, servers = servers)
 
     val message1 = new Message(new Array[Byte](configs(0).messageMaxBytes + 1))
     val messageSet1 = new ByteBufferMessageSet(compressionCodec = NoCompressionCodec, messages = message1)
@@ -127,8 +126,8 @@ class SyncProducerTest extends JUnit3Suite with KafkaServerTestHarness {
     props.put("request.required.acks", "0")
 
     val producer = new SyncProducer(new SyncProducerConfig(props))
-    AdminUtils.createTopic(zkClient, "test", 1, 1)
-    TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, "test", 0)
+    AdminUtils.createTopic(zkUtils, "test", 1, 1)
+    TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, "test", 0)
 
     // This message will be dropped silently since message size too large.
     producer.send(TestUtils.produceRequest("test", 0,
@@ -168,10 +167,10 @@ class SyncProducerTest extends JUnit3Suite with KafkaServerTestHarness {
     }
 
     // #2 - test that we get correct offsets when partition is owned by broker
-    AdminUtils.createTopic(zkClient, "topic1", 1, 1)
-    TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, "topic1", 0)
-    AdminUtils.createTopic(zkClient, "topic3", 1, 1)
-    TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, "topic3", 0)
+    AdminUtils.createTopic(zkUtils, "topic1", 1, 1)
+    TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, "topic1", 0)
+    AdminUtils.createTopic(zkUtils, "topic3", 1, 1)
+    TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, "topic3", 0)
 
     val response2 = producer.send(request)
     Assert.assertNotNull(response2)
@@ -245,8 +244,8 @@ class SyncProducerTest extends JUnit3Suite with KafkaServerTestHarness {
     val producer = new SyncProducer(new SyncProducerConfig(props))
     val topicProps = new Properties()
     topicProps.put("min.insync.replicas","2")
-    AdminUtils.createTopic(zkClient, topicName, 1, 1,topicProps)
-    TestUtils.waitUntilLeaderIsElectedOrChanged(zkClient, topicName, 0)
+    AdminUtils.createTopic(zkUtils, topicName, 1, 1,topicProps)
+    TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, topicName, 0)
 
     val response = producer.send(TestUtils.produceRequest(topicName, 0,
       new ByteBufferMessageSet(compressionCodec = NoCompressionCodec, messages = new Message(messageBytes)),-1))
