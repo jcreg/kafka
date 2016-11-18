@@ -41,7 +41,7 @@ public class GroupCoordinatorRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 return new GroupCoordinatorResponse(Errors.GROUP_COORDINATOR_NOT_AVAILABLE.code(), Node.noNode());
@@ -60,6 +60,6 @@ public class GroupCoordinatorRequest extends AbstractRequest {
     }
 
     public static GroupCoordinatorRequest parse(ByteBuffer buffer) {
-        return new GroupCoordinatorRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new GroupCoordinatorRequest(CURRENT_SCHEMA.read(buffer));
     }
 }

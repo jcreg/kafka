@@ -78,6 +78,9 @@ public class SchemaBuilder implements Schema {
 
     private SchemaBuilder(Type type) {
         this.type = type;
+        if (type == Type.STRUCT) {
+            fields = new ArrayList<>();
+        }
     }
 
     // Common/metadata fields
@@ -181,7 +184,7 @@ public class SchemaBuilder implements Schema {
 
     @Override
     public Map<String, String> parameters() {
-        return Collections.unmodifiableMap(parameters);
+        return parameters == null ? null : Collections.unmodifiableMap(parameters);
     }
 
     /**
@@ -236,63 +239,63 @@ public class SchemaBuilder implements Schema {
     // Primitive types
 
     /**
-     * @return a new {@link Type#INT8} SchemaBuilder
+     * @return a new {@link Schema.Type#INT8} SchemaBuilder
      */
     public static SchemaBuilder int8() {
         return new SchemaBuilder(Type.INT8);
     }
 
     /**
-     * @return a new {@link Type#INT16} SchemaBuilder
+     * @return a new {@link Schema.Type#INT16} SchemaBuilder
      */
     public static SchemaBuilder int16() {
         return new SchemaBuilder(Type.INT16);
     }
 
     /**
-     * @return a new {@link Type#INT32} SchemaBuilder
+     * @return a new {@link Schema.Type#INT32} SchemaBuilder
      */
     public static SchemaBuilder int32() {
         return new SchemaBuilder(Type.INT32);
     }
 
     /**
-     * @return a new {@link Type#INT64} SchemaBuilder
+     * @return a new {@link Schema.Type#INT64} SchemaBuilder
      */
     public static SchemaBuilder int64() {
         return new SchemaBuilder(Type.INT64);
     }
 
     /**
-     * @return a new {@link Type#FLOAT32} SchemaBuilder
+     * @return a new {@link Schema.Type#FLOAT32} SchemaBuilder
      */
     public static SchemaBuilder float32() {
         return new SchemaBuilder(Type.FLOAT32);
     }
 
     /**
-     * @return a new {@link Type#FLOAT64} SchemaBuilder
+     * @return a new {@link Schema.Type#FLOAT64} SchemaBuilder
      */
     public static SchemaBuilder float64() {
         return new SchemaBuilder(Type.FLOAT64);
     }
 
     /**
-     * @return a new {@link Type#BOOLEAN} SchemaBuilder
+     * @return a new {@link Schema.Type#BOOLEAN} SchemaBuilder
      */
     public static SchemaBuilder bool() {
         return new SchemaBuilder(Type.BOOLEAN);
     }
 
     /**
-     * @return a new {@link Type#STRING} SchemaBuilder
+     * @return a new {@link Schema.Type#STRING} SchemaBuilder
      */
     public static SchemaBuilder string() {
         return new SchemaBuilder(Type.STRING);
     }
 
     /**
-     * @return a new {@link Type#BYTES} SchemaBuilder
+     * @return a new {@link Schema.Type#BYTES} SchemaBuilder
      */
     public static SchemaBuilder bytes() {
         return new SchemaBuilder(Type.BYTES);
@@ -302,7 +305,7 @@ public class SchemaBuilder implements Schema {
     // Structs
 
     /**
-     * @return a new {@link Type#STRUCT} SchemaBuilder
+     * @return a new {@link Schema.Type#STRUCT} SchemaBuilder
      */
     public static SchemaBuilder struct() {
         return new SchemaBuilder(Type.STRUCT);
@@ -317,8 +320,6 @@ public class SchemaBuilder implements Schema {
     public SchemaBuilder field(String fieldName, Schema fieldSchema) {
         if (type != Type.STRUCT)
             throw new SchemaBuilderException("Cannot create fields on type " + type);
-        if (fields == null)
-            fields = new ArrayList<>();
         int fieldIndex = fields.size();
         fields.add(new Field(fieldName, fieldIndex, fieldSchema));
         return this;
@@ -338,7 +339,7 @@ public class SchemaBuilder implements Schema {
         if (type != Type.STRUCT)
             throw new DataException("Cannot look up fields on non-struct type");
         for (Field field : fields)
-            if (field.name() == fieldName)
+            if (field.name().equals(fieldName))
                 return field;
         return null;
     }
@@ -349,7 +350,7 @@ public class SchemaBuilder implements Schema {
 
     /**
      * @param valueSchema the schema for elements of the array
-     * @return a new {@link Type#ARRAY} SchemaBuilder
+     * @return a new {@link Schema.Type#ARRAY} SchemaBuilder
      */
     public static SchemaBuilder array(Schema valueSchema) {
         SchemaBuilder builder = new SchemaBuilder(Type.ARRAY);
@@ -360,7 +361,7 @@ public class SchemaBuilder implements Schema {
     /**
      * @param keySchema the schema for keys in the map
      * @param valueSchema the schema for values in the map
-     * @return a new {@link Type#MAP} SchemaBuilder
+     * @return a new {@link Schema.Type#MAP} SchemaBuilder
      */
     public static SchemaBuilder map(Schema keySchema, Schema valueSchema) {
         SchemaBuilder builder = new SchemaBuilder(Type.MAP);

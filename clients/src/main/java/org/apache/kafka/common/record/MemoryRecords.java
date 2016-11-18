@@ -13,18 +13,17 @@
 package org.apache.kafka.common.record;
 
 import java.io.DataInputStream;
-import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.GatheringByteChannel;
 import java.util.Iterator;
-
-import org.apache.kafka.common.KafkaException;
-import org.apache.kafka.common.utils.AbstractIterator;
 
 /**
  * A {@link Records} implementation backed by a ByteBuffer.
  */
 public class MemoryRecords implements Records {
+
+    public final static MemoryRecords EMPTY = MemoryRecords.readableRecords(ByteBuffer.allocate(0));
 
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
@@ -87,16 +86,18 @@ public class MemoryRecords implements Records {
 
     /**
      * Append a new record and offset to the buffer
+     * @return crc of the record
      */
-    public void append(long offset, byte[] key, byte[] value) {
+    public long append(long offset, long timestamp, byte[] key, byte[] value) {
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
         int size = Record.recordSize(key, value);
         compressor.putLong(offset);
         compressor.putInt(size);
-        compressor.putRecord(key, value);
+        long crc = compressor.putRecord(timestamp, key, value);
         compressor.recordWritten(size + Records.LOG_OVERHEAD);
+        return crc;
     }
 
     /**
@@ -112,7 +113,10 @@ public class MemoryRecords implements Records {
      * to accept this single record.
      */
     public boolean hasRoomFor(byte[] key, byte[] value) {
-        return this.writable && this.compressor.numRecordsWritten() == 0 ?
+        if (!this.writable)
+            return false;
+
+        return this.compressor.numRecordsWritten() == 0 ?
             this.initialCapacity >= Records.LOG_OVERHEAD + Record.recordSize(key, value) :
             this.writeLimit >= this.compressor.estimatedBytesWritten() + Records.LOG_OVERHEAD + Record.recordSize(key, value);
     }
@@ -141,12 +145,22 @@ public class MemoryRecords implements Records {
     /**
      * The size of this record set
      */
+    @Override
     public int sizeInBytes() {
         if (writable) {
             return compressor.buffer().position();
         } else {
-            return compressor.buffer().limit();
+            return buffer.limit();
         }
+    }
+
+    @Override
+    public long writeTo(GatheringByteChannel channel, long offset, int length) throws IOException {
+        ByteBuffer dup = buffer.duplicate();
+        int position = (int) offset;
+        dup.position(position);
+        dup.limit(position + length);
+        return channel.write(dup);
     }
 
     /**
@@ -179,13 +193,11 @@ public class MemoryRecords implements Records {
 
     @Override
     public Iterator<LogEntry> iterator() {
-        if (writable) {
+        ByteBuffer input = this.buffer.duplicate();
+        if (writable)
             // flip on a duplicate buffer for reading
-            return new RecordsIterator((ByteBuffer) this.buffer.duplicate().flip(), CompressionType.NONE, false);
-        } else {
-            // do not need to flip for non-writable buffer
-            return new RecordsIterator(this.buffer.duplicate(), CompressionType.NONE, false);
-        }
+            input.flip();
+        return new RecordsIterator(new ByteBufferLogInputStream(input), false);
     }
     
     @Override
@@ -207,79 +219,49 @@ public class MemoryRecords implements Records {
         return builder.toString();
     }
 
-    public static class RecordsIterator extends AbstractIterator<LogEntry> {
-        private final ByteBuffer buffer;
+    /** Visible for testing */
+    public boolean isWritable() {
+        return writable;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        MemoryRecords that = (MemoryRecords) o;
+
+        return buffer.equals(that.buffer);
+
+    }
+
+    @Override
+    public int hashCode() {
+        return buffer.hashCode();
+    }
+
+    private static class ByteBufferLogInputStream implements LogInputStream {
         private final DataInputStream stream;
-        private final CompressionType type;
-        private final boolean shallow;
-        private RecordsIterator innerIter;
+        private final ByteBuffer buffer;
 
-        public RecordsIterator(ByteBuffer buffer, CompressionType type, boolean shallow) {
-            this.type = type;
+        private ByteBufferLogInputStream(ByteBuffer buffer) {
+            this.stream = new DataInputStream(new ByteBufferInputStream(buffer));
             this.buffer = buffer;
-            this.shallow = shallow;
-            this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type);
         }
 
-        /*
-         * Read the next record from the buffer.
-         * 
-         * Note that in the compressed message set, each message value size is set as the size of the un-compressed
-         * version of the message value, so when we do de-compression allocating an array of the specified size for
-         * reading compressed value data is sufficient.
-         */
-        @Override
-        protected LogEntry makeNext() {
-            if (innerDone()) {
-                try {
-                    // read the offset
-                    long offset = stream.readLong();
-                    // read record size
-                    int size = stream.readInt();
-                    if (size < 0)
-                        throw new IllegalStateException("Record with size " + size);
-                    // read the record, if compression is used we cannot depend on size
-                    // and hence has to do extra copy
-                    ByteBuffer rec;
-                    if (type == CompressionType.NONE) {
-                        rec = buffer.slice();
-                        int newPos = buffer.position() + size;
-                        if (newPos > buffer.limit())
-                            return allDone();
-                        buffer.position(newPos);
-                        rec.limit(size);
-                    } else {
-                        byte[] recordBuffer = new byte[size];
-                        stream.readFully(recordBuffer, 0, size);
-                        rec = ByteBuffer.wrap(recordBuffer);
-                    }
-                    LogEntry entry = new LogEntry(offset, new Record(rec));
+        public LogEntry nextEntry() throws IOException {
+            long offset = stream.readLong();
+            int size = stream.readInt();
+            if (size < 0)
+                throw new IllegalStateException("Record with size " + size);
 
-                    // decide whether to go shallow or deep iteration if it is compressed
-                    CompressionType compression = entry.record().compressionType();
-                    if (compression == CompressionType.NONE || shallow) {
-                        return entry;
-                    } else {
-                        // init the inner iterator with the value payload of the message,
-                        // which will de-compress the payload to a set of messages;
-                        // since we assume nested compression is not allowed, the deep iterator
-                        // would not try to further decompress underlying messages
-                        ByteBuffer value = entry.record().value();
-                        innerIter = new RecordsIterator(value, compression, true);
-                        return innerIter.next();
-                    }
-                } catch (EOFException e) {
-                    return allDone();
-                } catch (IOException e) {
-                    throw new KafkaException(e);
-                }
-            } else {
-                return innerIter.next();
-            }
-        }
-
-        private boolean innerDone() {
-            return innerIter == null || !innerIter.hasNext();
+            ByteBuffer slice = buffer.slice();
+            int newPos = buffer.position() + size;
+            if (newPos > buffer.limit())
+                return null;
+            buffer.position(newPos);
+            slice.limit(size);
+            return new LogEntry(offset, new Record(slice));
         }
     }
 }

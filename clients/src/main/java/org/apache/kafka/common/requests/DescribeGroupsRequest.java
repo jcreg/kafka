@@ -46,7 +46,7 @@ public class DescribeGroupsRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 return DescribeGroupsResponse.fromError(Errors.forException(e), groupIds);
@@ -62,7 +62,7 @@ public class DescribeGroupsRequest extends AbstractRequest {
     }
 
     public static DescribeGroupsRequest parse(ByteBuffer buffer) {
-        return new DescribeGroupsRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new DescribeGroupsRequest(CURRENT_SCHEMA.read(buffer));
     }
 
 }

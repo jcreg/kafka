@@ -106,9 +106,11 @@ public class SslTransportLayer implements TransportLayer {
      * does socketChannel.finishConnect()
      */
     @Override
-    public void finishConnect() throws IOException {
-        socketChannel.finishConnect();
-        key.interestOps(key.interestOps() & ~SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
+    public boolean finishConnect() throws IOException {
+        boolean connected = socketChannel.finishConnect();
+        if (connected)
+            key.interestOps(key.interestOps() & ~SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
+        return connected;
     }
 
     /**
@@ -139,7 +141,7 @@ public class SslTransportLayer implements TransportLayer {
     * Sends a SSL close message and closes socketChannel.
     */
     @Override
-    public void close() {
+    public void close() throws IOException {
         if (closing) return;
         closing = true;
         sslEngine.closeOutbound();
@@ -166,12 +168,11 @@ public class SslTransportLayer implements TransportLayer {
             try {
                 socketChannel.socket().close();
                 socketChannel.close();
-            } catch (IOException e) {
-                log.warn("Failed to close SSL socket channel: " + e);
+            } finally {
+                key.attach(null);
+                key.cancel();
             }
         }
-        key.attach(null);
-        key.cancel();
     }
 
     /**
@@ -351,8 +352,12 @@ public class SslTransportLayer implements TransportLayer {
             //remove OP_WRITE if we are complete, otherwise we still have data to write
             if (!handshakeComplete)
                 key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-            else
+            else {
                 key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                SSLSession session = sslEngine.getSession();
+                log.debug("SSL handshake completed successfully with peerHost '{}' peerPort {} peerPrincipal '{}' cipherSuite '{}'",
+                        session.getPeerHost(), session.getPeerPort(), peerPrincipal(), session.getCipherSuite());
+            }
 
             log.trace("SSLHandshake FINISHED channelId {}, appReadBuffer pos {}, netReadBuffer pos {}, netWriteBuffer pos {} ",
                       channelId, appReadBuffer.position(), netReadBuffer.position(), netWriteBuffer.position());
@@ -396,12 +401,11 @@ public class SslTransportLayer implements TransportLayer {
     private SSLEngineResult handshakeUnwrap(boolean doRead) throws IOException {
         log.trace("SSLHandshake handshakeUnwrap {}", channelId);
         SSLEngineResult result;
-        boolean cont = false;
-        int read = 0;
         if (doRead)  {
-            read = socketChannel.read(netReadBuffer);
+            int read = socketChannel.read(netReadBuffer);
             if (read == -1) throw new EOFException("EOF during handshake.");
         }
+        boolean cont;
         do {
             //prepare the buffer with the incoming data
             netReadBuffer.flip();
@@ -634,7 +638,7 @@ public class SslTransportLayer implements TransportLayer {
         try {
             return sslEngine.getSession().getPeerPrincipal();
         } catch (SSLPeerUnverifiedException se) {
-            log.warn("SSL peer is not authenticated, returning ANONYMOUS instead");
+            log.debug("SSL peer is not authenticated, returning ANONYMOUS instead");
             return KafkaPrincipal.ANONYMOUS;
         }
     }

@@ -25,7 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class OffsetCommitResponse extends AbstractRequestResponse {
+public class OffsetCommitResponse extends AbstractResponse {
     
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.OFFSET_COMMIT.id);
     private static final String RESPONSES_KEY_NAME = "responses";
@@ -41,6 +41,7 @@ public class OffsetCommitResponse extends AbstractRequestResponse {
     /**
      * Possible error codes:
      *
+     * UNKNOWN_TOPIC_OR_PARTITION (3)
      * OFFSET_METADATA_TOO_LARGE (12)
      * GROUP_LOAD_IN_PROGRESS (14)
      * GROUP_COORDINATOR_NOT_AVAILABLE (15)
@@ -97,7 +98,12 @@ public class OffsetCommitResponse extends AbstractRequestResponse {
         return responseData;
     }
 
+    public static OffsetCommitResponse parse(ByteBuffer buffer, int version) {
+        Schema schema = ProtoUtils.responseSchema(ApiKeys.OFFSET_COMMIT.id, version);
+        return new OffsetCommitResponse(schema.read(buffer));
+    }
+
     public static OffsetCommitResponse parse(ByteBuffer buffer) {
-        return new OffsetCommitResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new OffsetCommitResponse(CURRENT_SCHEMA.read(buffer));
     }
 }

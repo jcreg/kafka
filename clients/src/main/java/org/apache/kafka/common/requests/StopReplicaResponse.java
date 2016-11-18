@@ -21,9 +21,12 @@ import org.apache.kafka.common.protocol.types.Schema;
 import org.apache.kafka.common.protocol.types.Struct;
 
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-public class StopReplicaResponse extends AbstractRequestResponse {
+public class StopReplicaResponse extends AbstractResponse {
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.STOP_REPLICA.id);
 
     private static final String ERROR_CODE_KEY_NAME = "error_code";
@@ -96,6 +99,6 @@ public class StopReplicaResponse extends AbstractRequestResponse {
     }
 
     public static StopReplicaResponse parse(ByteBuffer buffer) {
-        return new StopReplicaResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new StopReplicaResponse(CURRENT_SCHEMA.read(buffer));
     }
 }

@@ -17,6 +17,7 @@
 
 package org.apache.kafka.common.requests;
 
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
@@ -25,40 +26,14 @@ import org.apache.kafka.common.protocol.types.Schema;
 import org.apache.kafka.common.protocol.types.Struct;
 
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class LeaderAndIsrRequest extends AbstractRequest {
-
-    public static class PartitionState {
-        public final int controllerEpoch;
-        public final int leader;
-        public final int leaderEpoch;
-        public final List<Integer> isr;
-        public final int zkVersion;
-        public final Set<Integer> replicas;
-
-        public PartitionState(int controllerEpoch, int leader, int leaderEpoch, List<Integer> isr, int zkVersion, Set<Integer> replicas) {
-            this.controllerEpoch = controllerEpoch;
-            this.leader = leader;
-            this.leaderEpoch = leaderEpoch;
-            this.isr = isr;
-            this.zkVersion = zkVersion;
-            this.replicas = replicas;
-        }
-
-    }
-
-    public static final class EndPoint {
-        public final int id;
-        public final String host;
-        public final int port;
-
-        public EndPoint(int id, String host, int port) {
-            this.id = id;
-            this.host = host;
-            this.port = port;
-        }
-    }
 
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentRequestSchema(ApiKeys.LEADER_AND_ISR.id);
 
@@ -84,10 +59,10 @@ public class LeaderAndIsrRequest extends AbstractRequest {
     private final int controllerId;
     private final int controllerEpoch;
     private final Map<TopicPartition, PartitionState> partitionStates;
-    private final Set<EndPoint> liveLeaders;
+    private final Set<Node> liveLeaders;
 
     public LeaderAndIsrRequest(int controllerId, int controllerEpoch, Map<TopicPartition, PartitionState> partitionStates,
-                               Set<EndPoint> liveLeaders) {
+                               Set<Node> liveLeaders) {
         super(new Struct(CURRENT_SCHEMA));
         struct.set(CONTROLLER_ID_KEY_NAME, controllerId);
         struct.set(CONTROLLER_EPOCH_KEY_NAME, controllerEpoch);
@@ -110,11 +85,11 @@ public class LeaderAndIsrRequest extends AbstractRequest {
         struct.set(PARTITION_STATES_KEY_NAME, partitionStatesData.toArray());
 
         List<Struct> leadersData = new ArrayList<>(liveLeaders.size());
-        for (EndPoint leader : liveLeaders) {
+        for (Node leader : liveLeaders) {
             Struct leaderData = struct.instance(LIVE_LEADERS_KEY_NAME);
-            leaderData.set(END_POINT_ID_KEY_NAME, leader.id);
-            leaderData.set(HOST_KEY_NAME, leader.host);
-            leaderData.set(PORT_KEY_NAME, leader.port);
+            leaderData.set(END_POINT_ID_KEY_NAME, leader.id());
+            leaderData.set(HOST_KEY_NAME, leader.host());
+            leaderData.set(PORT_KEY_NAME, leader.port());
             leadersData.add(leaderData);
         }
         struct.set(LIVE_LEADERS_KEY_NAME, leadersData.toArray());
@@ -154,13 +129,13 @@ public class LeaderAndIsrRequest extends AbstractRequest {
 
         }
 
-        Set<EndPoint> leaders = new HashSet<>();
+        Set<Node> leaders = new HashSet<>();
         for (Object leadersDataObj : struct.getArray(LIVE_LEADERS_KEY_NAME)) {
             Struct leadersData = (Struct) leadersDataObj;
             int id = leadersData.getInt(END_POINT_ID_KEY_NAME);
             String host = leadersData.getString(HOST_KEY_NAME);
             int port = leadersData.getInt(PORT_KEY_NAME);
-            leaders.add(new EndPoint(id, host, port));
+            leaders.add(new Node(id, host, port));
         }
 
         controllerId = struct.getInt(CONTROLLER_ID_KEY_NAME);
@@ -170,7 +145,7 @@ public class LeaderAndIsrRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         Map<TopicPartition, Short> responses = new HashMap<>(partitionStates.size());
         for (TopicPartition partition : partitionStates.keySet()) {
             responses.put(partition, Errors.forException(e).code());
@@ -197,7 +172,7 @@ public class LeaderAndIsrRequest extends AbstractRequest {
         return partitionStates;
     }
 
-    public Set<EndPoint> liveLeaders() {
+    public Set<Node> liveLeaders() {
         return liveLeaders;
     }
 
@@ -206,7 +181,7 @@ public class LeaderAndIsrRequest extends AbstractRequest {
     }
 
     public static LeaderAndIsrRequest parse(ByteBuffer buffer) {
-        return new LeaderAndIsrRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new LeaderAndIsrRequest(CURRENT_SCHEMA.read(buffer));
     }
 
 }

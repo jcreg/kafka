@@ -43,7 +43,7 @@ public class LeaveGroupRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 return new LeaveGroupResponse(Errors.forException(e).code());
@@ -66,6 +66,6 @@ public class LeaveGroupRequest extends AbstractRequest {
     }
 
     public static LeaveGroupRequest parse(ByteBuffer buffer) {
-        return new LeaveGroupRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new LeaveGroupRequest(CURRENT_SCHEMA.read(buffer));
     }
 }

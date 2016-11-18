@@ -72,6 +72,9 @@ public class Crc32 implements Checksum {
 
     @Override
     public void update(byte[] b, int off, int len) {
+        if (off < 0 || len < 0 || off > b.length - len)
+            throw new ArrayIndexOutOfBoundsException();
+
         int localCrc = crc;
 
         while (len > 7) {
@@ -125,6 +128,17 @@ public class Crc32 implements Checksum {
      * Update the CRC32 given an integer
      */
     final public void updateInt(int input) {
+        update((byte) (input >> 24));
+        update((byte) (input >> 16));
+        update((byte) (input >> 8));
+        update((byte) input /* >> 0 */);
+    }
+
+    final public void updateLong(long input) {
+        update((byte) (input >> 56));
+        update((byte) (input >> 48));
+        update((byte) (input >> 40));
+        update((byte) (input >> 32));
         update((byte) (input >> 24));
         update((byte) (input >> 16));
         update((byte) (input >> 8));

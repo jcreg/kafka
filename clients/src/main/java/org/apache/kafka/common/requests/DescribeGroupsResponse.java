@@ -25,7 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class DescribeGroupsResponse extends AbstractRequestResponse {
+public class DescribeGroupsResponse extends AbstractResponse {
 
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.DESCRIBE_GROUPS.id);
 
@@ -210,7 +210,7 @@ public class DescribeGroupsResponse extends AbstractRequestResponse {
     }
 
     public static DescribeGroupsResponse parse(ByteBuffer buffer) {
-        return new DescribeGroupsResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new DescribeGroupsResponse(CURRENT_SCHEMA.read(buffer));
     }
 
     public static DescribeGroupsResponse fromError(Errors error, List<String> groupIds) {

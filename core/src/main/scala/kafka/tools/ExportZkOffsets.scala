@@ -20,12 +20,12 @@ package kafka.tools
 import java.io.FileWriter
 import joptsimple._
 import kafka.utils.{Logging, ZkUtils, ZKGroupTopicDirs, CommandLineUtils}
-import org.I0Itec.zkclient.ZkClient
 import org.apache.kafka.common.security.JaasUtils
+import scala.collection.JavaConverters._
 
 
 /**
- *  A utility that retrieve the offset of broker partitions in ZK and
+ *  A utility that retrieves the offset of broker partitions in ZK and
  *  prints to an output file in the following format:
  *  
  *  /consumers/group1/offsets/topic1/1-0:286894308
@@ -88,8 +88,7 @@ object ExportZkOffsets extends Logging {
         consumerGroups = zkUtils.getChildren(ZkUtils.ConsumersPath).toList
       }
       else {
-        import scala.collection.JavaConversions._
-        consumerGroups = groups
+        consumerGroups = groups.asScala
       }
       
       for (consumerGrp <- consumerGroups) {

@@ -19,11 +19,14 @@ package kafka.log
 
 import java.io._
 import java.util.concurrent.TimeUnit
+
 import kafka.utils._
+
 import scala.collection._
-import kafka.common.{TopicAndPartition, KafkaException}
-import kafka.server.{RecoveringFromUncleanShutdown, BrokerState, OffsetCheckpoint}
-import java.util.concurrent.{Executors, ExecutorService, ExecutionException, Future}
+import scala.collection.JavaConverters._
+import kafka.common.{KafkaException, TopicAndPartition}
+import kafka.server.{BrokerState, OffsetCheckpoint, RecoveringFromUncleanShutdown}
+import java.util.concurrent.{ExecutionException, ExecutorService, Executors, Future}
 
 /**
  * The entry point to the kafka log management subsystem. The log manager is responsible for log creation, retrieval, and cleaning.
@@ -106,7 +109,7 @@ class LogManager(val logDirs: Array[File],
    */
   private def loadLogs(): Unit = {
     info("Loading logs.")
-
+    val startMs = time.milliseconds
     val threadPools = mutable.ArrayBuffer.empty[ExecutorService]
     val jobs = mutable.Map.empty[File, Seq[Future[_]]]
 
@@ -130,10 +133,9 @@ class LogManager(val logDirs: Array[File],
       try {
         recoveryPoints = this.recoveryPointCheckpoints(dir).read
       } catch {
-        case e: Exception => {
+        case e: Exception =>
           warn("Error occured while reading recovery-point-offset-checkpoint file of directory " + dir, e)
           warn("Resetting the recovery checkpoint to 0")
-        }
       }
 
       val jobsForDir = for {
@@ -176,7 +178,7 @@ class LogManager(val logDirs: Array[File],
       threadPools.foreach(_.shutdown())
     }
 
-    info("Logs loading complete.")
+    info(s"Logs loading complete in ${time.milliseconds - startMs} ms.")
   }
 
   /**
@@ -186,10 +188,10 @@ class LogManager(val logDirs: Array[File],
     /* Schedule the cleanup task to delete old logs */
     if(scheduler != null) {
       info("Starting log cleanup with a period of %d ms.".format(retentionCheckMs))
-      scheduler.schedule("kafka-log-retention", 
-                         cleanupLogs, 
-                         delay = InitialTaskDelayMs, 
-                         period = retentionCheckMs, 
+      scheduler.schedule("kafka-log-retention",
+                         cleanupLogs,
+                         delay = InitialTaskDelayMs,
+                         period = retentionCheckMs,
                          TimeUnit.MILLISECONDS)
       info("Starting log flusher with a default period of %d ms.".format(flushCheckMs))
       scheduler.schedule("kafka-log-flusher", 
@@ -280,12 +282,14 @@ class LogManager(val logDirs: Array[File],
       // If the log does not exist, skip it
       if (log != null) {
         //May need to abort and pause the cleaning of the log, and resume after truncation is done.
-        val needToStopCleaner: Boolean = (truncateOffset < log.activeSegment.baseOffset)
+        val needToStopCleaner: Boolean = truncateOffset < log.activeSegment.baseOffset
         if (needToStopCleaner && cleaner != null)
           cleaner.abortAndPauseCleaning(topicAndPartition)
         log.truncateTo(truncateOffset)
-        if (needToStopCleaner && cleaner != null)
+        if (needToStopCleaner && cleaner != null) {
+          cleaner.maybeTruncateCheckpoint(log.dir.getParentFile, topicAndPartition, log.activeSegment.baseOffset)
           cleaner.resumeCleaning(topicAndPartition)
+        }
       }
     }
     checkpointRecoveryPointOffsets()
@@ -303,8 +307,10 @@ class LogManager(val logDirs: Array[File],
       if (cleaner != null)
         cleaner.abortAndPauseCleaning(topicAndPartition)
       log.truncateFullyAndStartAt(newOffset)
-      if (cleaner != null)
+      if (cleaner != null) {
+        cleaner.maybeTruncateCheckpoint(log.dir.getParentFile, topicAndPartition, log.activeSegment.baseOffset)
         cleaner.resumeCleaning(topicAndPartition)
+      }
     }
     checkpointRecoveryPointOffsets()
   }
@@ -361,10 +367,10 @@ class LogManager(val logDirs: Array[File],
                     time)
       logs.put(topicAndPartition, log)
       info("Created log for partition [%s,%d] in %s with properties {%s}."
-           .format(topicAndPartition.topic, 
-                   topicAndPartition.partition, 
+           .format(topicAndPartition.topic,
+                   topicAndPartition.partition,
                    dataDir.getAbsolutePath,
-                   {import JavaConversions._; config.originals.mkString(", ")}))
+                   config.originals.asScala.mkString(", ")))
       log
     }
   }
@@ -412,36 +418,8 @@ class LogManager(val logDirs: Array[File],
   }
 
   /**
-   * Runs through the log removing segments older than a certain age
-   */
-  private def cleanupExpiredSegments(log: Log): Int = {
-    if (log.config.retentionMs < 0)
-      return 0
-    val startMs = time.milliseconds
-    log.deleteOldSegments(startMs - _.lastModified > log.config.retentionMs)
-  }
-
-  /**
-   *  Runs through the log removing segments until the size of the log
-   *  is at least logRetentionSize bytes in size
-   */
-  private def cleanupSegmentsToMaintainSize(log: Log): Int = {
-    if(log.config.retentionSize < 0 || log.size < log.config.retentionSize)
-      return 0
-    var diff = log.size - log.config.retentionSize
-    def shouldDelete(segment: LogSegment) = {
-      if(diff - segment.size >= 0) {
-        diff -= segment.size
-        true
-      } else {
-        false
-      }
-    }
-    log.deleteOldSegments(shouldDelete)
-  }
-
-  /**
    * Delete any eligible logs. Return the number of segments deleted.
+   * Only consider logs that are not compacted.
    */
   def cleanupLogs() {
     debug("Beginning log cleanup...")
@@ -449,7 +427,7 @@ class LogManager(val logDirs: Array[File],
     val startMs = time.milliseconds
     for(log <- allLogs; if !log.config.compact) {
       debug("Garbage collecting '" + log.name + "'")
-      total += cleanupExpiredSegments(log) + cleanupSegmentsToMaintainSize(log)
+      total += log.deleteOldSegments()
     }
     debug("Log cleanup completed. " + total + " files deleted in " +
                   (time.milliseconds - startMs) / 1000 + " seconds")
@@ -463,7 +441,7 @@ class LogManager(val logDirs: Array[File],
   /**
    * Get a map of TopicAndPartition => Log
    */
-  def logsByTopicPartition = logs.toMap
+  def logsByTopicPartition: Map[TopicAndPartition, Log] = logs.toMap
 
   /**
    * Map of log dir to logs by topic and partitions in that dir

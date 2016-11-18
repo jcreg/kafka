@@ -77,6 +77,15 @@ final class ClusterConnectionStates {
     }
 
     /**
+     * Return true if a specific connection establishment is currently underway
+     * @param id The id of the node to check
+     */
+    public boolean isConnecting(String id) {
+        NodeConnectionState state = nodeState.get(id);
+        return state != null && state.state == ConnectionState.CONNECTING;
+    }
+
+    /**
      * Enter the connecting state for the given connection.
      * @param id The id of the connection
      * @param now The current time.
@@ -92,15 +101,6 @@ final class ClusterConnectionStates {
     public boolean isConnected(String id) {
         NodeConnectionState state = nodeState.get(id);
         return state != null && state.state == ConnectionState.CONNECTED;
-    }
-
-    /**
-     * Return true iff we are in the process of connecting
-     * @param id The id of the connection
-     */
-    public boolean isConnecting(String id) {
-        NodeConnectionState state = nodeState.get(id);
-        return state != null && state.state == ConnectionState.CONNECTING;
     }
 
     /**

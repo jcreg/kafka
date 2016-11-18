@@ -23,7 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class ListGroupsResponse extends AbstractRequestResponse {
+public class ListGroupsResponse extends AbstractResponse {
 
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.LIST_GROUPS.id);
 
@@ -97,7 +97,7 @@ public class ListGroupsResponse extends AbstractRequestResponse {
     }
 
     public static ListGroupsResponse parse(ByteBuffer buffer) {
-        return new ListGroupsResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new ListGroupsResponse(CURRENT_SCHEMA.read(buffer));
     }
 
     public static ListGroupsResponse fromError(Errors error) {

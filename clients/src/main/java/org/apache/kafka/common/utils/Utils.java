@@ -14,6 +14,7 @@ package org.apache.kafka.common.utils;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.OutputStream;
@@ -23,6 +24,9 @@ import java.io.StringWriter;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,7 +51,7 @@ public class Utils {
 
     // This matches URIs of formats: host:port and protocol:\\host:port
     // IPv6 is supported with [ip] pattern
-    private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-z\\-.:]*)\\]?:([0-9]+)");
+    private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
 
     public static final String NL = System.getProperty("line.separator");
 
@@ -129,7 +133,7 @@ public class Utils {
 
     /**
      * Get the little-endian value of an integer as a byte array.
-     * @param val The value to convert to a litte-endian array
+     * @param val The value to convert to a little-endian array
      * @return The little-endian encoded array of bytes for the value
      */
     public static byte[] toArrayLE(int val) {
@@ -163,7 +167,7 @@ public class Utils {
      * @param buffer The buffer to write to
      * @param value The value to write
      */
-    public static void writetUnsignedInt(ByteBuffer buffer, long value) {
+    public static void writeUnsignedInt(ByteBuffer buffer, long value) {
         buffer.putInt((int) (value & 0xffffffffL));
     }
 
@@ -439,13 +443,8 @@ public class Utils {
      */
     public static Properties loadProps(String filename) throws IOException, FileNotFoundException {
         Properties props = new Properties();
-        InputStream propStream = null;
-        try {
-            propStream = new FileInputStream(filename);
+        try (InputStream propStream = new FileInputStream(filename)) {
             props.load(propStream);
-        } finally {
-            if (propStream != null)
-                propStream.close();
         }
         return props;
     }
@@ -478,7 +477,7 @@ public class Utils {
      * @param daemon Should the thread block JVM shutdown?
      * @return The unstarted thread
      */
-    public static Thread newThread(String name, Runnable runnable, Boolean daemon) {
+    public static Thread newThread(String name, Runnable runnable, boolean daemon) {
         Thread thread = new Thread(runnable, name);
         thread.setDaemon(daemon);
         thread.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
@@ -537,16 +536,13 @@ public class Utils {
      */
     public static String readFileAsString(String path, Charset charset) throws IOException {
         if (charset == null) charset = Charset.defaultCharset();
-        FileInputStream stream = new FileInputStream(new File(path));
-        String result = new String();
-        try {
+
+        try (FileInputStream stream = new FileInputStream(new File(path))) {
             FileChannel fc = stream.getChannel();
             MappedByteBuffer bb = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size());
-            result = charset.decode(bb).toString();
-        } finally {
-            stream.close();
+            return charset.decode(bb).toString();
         }
-        return result;
+
     }
 
     public static String readFileAsString(String path) throws IOException {
@@ -575,6 +571,7 @@ public class Utils {
      * @param <T> the type of element
      * @return Set
      */
+    @SafeVarargs
     public static <T> Set<T> mkSet(T... elems) {
         return new HashSet<>(Arrays.asList(elems));
     }
@@ -585,6 +582,7 @@ public class Utils {
      * @param <T> the type of element
      * @return List
      */
+    @SafeVarargs
     public static <T> List<T> mkList(T... elems) {
         return Arrays.asList(elems);
     }
@@ -659,4 +657,79 @@ public class Utils {
             return cl;
     }
 
+    /**
+     * Attempts to move source to target atomically and falls back to a non-atomic move if it fails.
+     *
+     * @throws IOException if both atomic and non-atomic moves fail
+     */
+    public static void atomicMoveWithFallback(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException outer) {
+            try {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                log.debug("Non-atomic move of " + source + " to " + target + " succeeded after atomic move failed due to "
+                        + outer.getMessage());
+            } catch (IOException inner) {
+                inner.addSuppressed(outer);
+                throw inner;
+            }
+        }
+    }
+
+    /**
+     * Closes all the provided closeables.
+     * @throws IOException if any of the close methods throws an IOException.
+     *         The first IOException is thrown with subsequent exceptions
+     *         added as suppressed exceptions.
+     */
+    public static void closeAll(Closeable... closeables) throws IOException {
+        IOException exception = null;
+        for (Closeable closeable : closeables) {
+            try {
+                closeable.close();
+            } catch (IOException e) {
+                if (exception != null)
+                    exception.addSuppressed(e);
+                else
+                    exception = e;
+            }
+        }
+        if (exception != null)
+            throw exception;
+    }
+
+    /**
+     * Closes {@code closeable} and if an exception is thrown, it is logged at the WARN level.
+     */
+    public static void closeQuietly(Closeable closeable, String name) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (Throwable t) {
+                log.warn("Failed to close " + name, t);
+            }
+        }
+    }
+
+    /**
+     * A cheap way to deterministically convert a number to a positive value. When the input is
+     * positive, the original value is returned. When the input number is negative, the returned
+     * positive value is the original value bit AND against 0x7fffffff which is not its absolutely
+     * value.
+     *
+     * Note: changing this method in the future will possibly cause partition selection not to be
+     * compatible with the existing messages already placed on a partition since it is used
+     * in producer's {@link org.apache.kafka.clients.producer.internals.DefaultPartitioner}
+     *
+     * @param number a given number
+     * @return a positive number.
+     */
+    public static int toPositive(int number) {
+        return number & 0x7fffffff;
+    }
+
+    public static int longHashcode(long value) {
+        return (int) (value ^ (value >>> 32));
+    }
 }

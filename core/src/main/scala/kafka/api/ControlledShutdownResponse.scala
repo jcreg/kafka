@@ -18,8 +18,9 @@
 package kafka.api
 
 import java.nio.ByteBuffer
-import kafka.common.{TopicAndPartition, ErrorMapping}
+import kafka.common.TopicAndPartition
 import kafka.api.ApiUtils._
+import org.apache.kafka.common.protocol.Errors
 import collection.Set
 
 object ControlledShutdownResponse {
@@ -29,7 +30,7 @@ object ControlledShutdownResponse {
     val numEntries = buffer.getInt
 
     var partitionsRemaining = Set[TopicAndPartition]()
-    for (i<- 0 until numEntries){
+    for (_ <- 0 until numEntries){
       val topic = readShortString(buffer)
       val partition = buffer.getInt
       partitionsRemaining += new TopicAndPartition(topic, partition)
@@ -40,7 +41,7 @@ object ControlledShutdownResponse {
 
 
 case class ControlledShutdownResponse(correlationId: Int,
-                                      errorCode: Short = ErrorMapping.NoError,
+                                      errorCode: Short = Errors.NONE.code,
                                       partitionsRemaining: Set[TopicAndPartition])
   extends RequestOrResponse() {
   def sizeInBytes(): Int ={

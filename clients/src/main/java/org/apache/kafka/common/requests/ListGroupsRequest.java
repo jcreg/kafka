@@ -34,7 +34,7 @@ public class ListGroupsRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 short errorCode = Errors.forException(e).code();
@@ -50,7 +50,7 @@ public class ListGroupsRequest extends AbstractRequest {
     }
 
     public static ListGroupsRequest parse(ByteBuffer buffer) {
-        return new ListGroupsRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new ListGroupsRequest(CURRENT_SCHEMA.read(buffer));
     }
 
 

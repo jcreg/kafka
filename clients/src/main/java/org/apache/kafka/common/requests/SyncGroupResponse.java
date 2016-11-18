@@ -23,7 +23,7 @@ import org.apache.kafka.common.protocol.types.Struct;
 
 import java.nio.ByteBuffer;
 
-public class SyncGroupResponse extends AbstractRequestResponse {
+public class SyncGroupResponse extends AbstractResponse {
 
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.SYNC_GROUP.id);
     public static final String ERROR_CODE_KEY_NAME = "error_code";
@@ -69,7 +69,7 @@ public class SyncGroupResponse extends AbstractRequestResponse {
     }
 
     public static SyncGroupResponse parse(ByteBuffer buffer) {
-        return new SyncGroupResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new SyncGroupResponse(CURRENT_SCHEMA.read(buffer));
     }
 
 }

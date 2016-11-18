@@ -19,10 +19,9 @@ package org.apache.kafka.connect.runtime.rest.entities;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
 import org.apache.kafka.connect.util.ConnectorTaskId;
 
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,12 +33,14 @@ public class ConnectorInfo {
     private final List<ConnectorTaskId> tasks;
 
     @JsonCreator
-    public ConnectorInfo(@JsonProperty("name") String name, @JsonProperty("config") Map<String, String> config,
+    public ConnectorInfo(@JsonProperty("name") String name,
+                         @JsonProperty("config") Map<String, String> config,
                          @JsonProperty("tasks") List<ConnectorTaskId> tasks) {
         this.name = name;
         this.config = config;
         this.tasks = tasks;
     }
+
 
     @JsonProperty
     public String name() {
@@ -71,11 +72,4 @@ public class ConnectorInfo {
         return Objects.hash(name, config, tasks);
     }
 
-
-    private static List<ConnectorTaskId> jsonTasks(Collection<org.apache.kafka.connect.util.ConnectorTaskId> tasks) {
-        List<ConnectorTaskId> jsonTasks = new ArrayList<>();
-        for (ConnectorTaskId task : tasks)
-            jsonTasks.add(task);
-        return jsonTasks;
-    }
 }

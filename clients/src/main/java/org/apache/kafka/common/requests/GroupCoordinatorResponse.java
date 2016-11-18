@@ -20,7 +20,7 @@ import org.apache.kafka.common.protocol.types.Struct;
 
 import java.nio.ByteBuffer;
 
-public class GroupCoordinatorResponse extends AbstractRequestResponse {
+public class GroupCoordinatorResponse extends AbstractResponse {
     
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.GROUP_COORDINATOR.id);
     private static final String ERROR_CODE_KEY_NAME = "error_code";
@@ -74,6 +74,6 @@ public class GroupCoordinatorResponse extends AbstractRequestResponse {
     }
 
     public static GroupCoordinatorResponse parse(ByteBuffer buffer) {
-        return new GroupCoordinatorResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new GroupCoordinatorResponse(CURRENT_SCHEMA.read(buffer));
     }
 }

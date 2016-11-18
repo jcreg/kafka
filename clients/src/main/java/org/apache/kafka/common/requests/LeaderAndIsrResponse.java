@@ -26,7 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class LeaderAndIsrResponse extends AbstractRequestResponse {
+public class LeaderAndIsrResponse extends AbstractResponse {
     private static final Schema CURRENT_SCHEMA = ProtoUtils.currentResponseSchema(ApiKeys.LEADER_AND_ISR.id);
 
     private static final String ERROR_CODE_KEY_NAME = "error_code";
@@ -99,7 +99,7 @@ public class LeaderAndIsrResponse extends AbstractRequestResponse {
     }
 
     public static LeaderAndIsrResponse parse(ByteBuffer buffer) {
-        return new LeaderAndIsrResponse((Struct) CURRENT_SCHEMA.read(buffer));
+        return new LeaderAndIsrResponse(CURRENT_SCHEMA.read(buffer));
     }
 
 }

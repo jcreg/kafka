@@ -17,13 +17,19 @@ import static net.sourceforge.argparse4j.impl.Arguments.store;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.Random;
+
+import org.apache.kafka.clients.producer.Callback;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-
-import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.common.utils.Utils;
 
 public class ProducerPerformance {
 
@@ -39,8 +45,16 @@ public class ProducerPerformance {
             int recordSize = res.getInt("recordSize");
             int throughput = res.getInt("throughput");
             List<String> producerProps = res.getList("producerConfig");
+            String producerConfig = res.getString("producerConfigFile");
+
+            if (producerProps == null && producerConfig == null) {
+                throw new ArgumentParserException("Either --producer-props or --producer.config must be specified.", parser);
+            }
 
             Properties props = new Properties();
+            if (producerConfig != null) {
+                props.putAll(Utils.loadProps(producerConfig));
+            }
             if (producerProps != null)
                 for (String prop : producerProps) {
                     String[] pieces = prop.split("=");
@@ -55,8 +69,10 @@ public class ProducerPerformance {
 
             /* setup perf test */
             byte[] payload = new byte[recordSize];
-            Arrays.fill(payload, (byte) 1);
-            ProducerRecord<byte[], byte[]> record = new ProducerRecord<byte[], byte[]>(topicName, payload);
+            Random random = new Random(0);
+            for (int i = 0; i < payload.length; ++i)
+                payload[i] = (byte) (random.nextInt(26) + 65);
+            ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topicName, payload);
             Stats stats = new Stats(numRecords, 5000);
             long startMs = System.currentTimeMillis();
 
@@ -125,11 +141,20 @@ public class ProducerPerformance {
 
         parser.addArgument("--producer-props")
                  .nargs("+")
-                 .required(true)
+                 .required(false)
                  .metavar("PROP-NAME=PROP-VALUE")
                  .type(String.class)
                  .dest("producerConfig")
-                 .help("kafka producer related configuaration properties like bootstrap.servers,client.id etc..");
+                 .help("kafka producer related configuration properties like bootstrap.servers,client.id etc. " +
+                         "These configs take precedence over those passed via --producer.config.");
+
+        parser.addArgument("--producer.config")
+                .action(store())
+                .required(false)
+                .type(String.class)
+                .metavar("CONFIG-FILE")
+                .dest("producerConfigFile")
+                .help("producer config properties file.");
 
         return parser;
     }

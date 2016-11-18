@@ -5,7 +5,7 @@
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
- * 
+ *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
@@ -17,22 +17,17 @@
 
 package kafka.api
 
-
-import java.nio.channels.GatheringByteChannel
-
-import kafka.cluster.{BrokerEndPoint, EndPoint, Broker}
-import kafka.common.{OffsetAndMetadata, ErrorMapping, OffsetMetadataAndError}
+import kafka.cluster.{EndPoint, Broker}
+import kafka.common.{OffsetAndMetadata, OffsetMetadataAndError}
 import kafka.common._
-import kafka.consumer.FetchRequestAndResponseStatsRegistry
 import kafka.message.{Message, ByteBufferMessageSet}
 import kafka.utils.SystemTime
 
-import kafka.controller.LeaderIsrAndControllerEpoch
 import kafka.common.TopicAndPartition
 
 import java.nio.ByteBuffer
 
-import org.apache.kafka.common.protocol.SecurityProtocol
+import org.apache.kafka.common.protocol.{Errors, SecurityProtocol}
 import org.junit._
 import org.scalatest.junit.JUnitSuite
 import org.junit.Assert._
@@ -41,10 +36,6 @@ import org.junit.Assert._
 object SerializationTestUtils {
   private val topic1 = "test1"
   private val topic2 = "test2"
-  private val leader1 = 0
-  private val isr1 = List(0, 1, 2)
-  private val leader2 = 0
-  private val isr2 = List(0, 2, 3)
   private val partitionDataFetchResponse0 = new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("first message".getBytes)))
   private val partitionDataFetchResponse1 = new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("second message".getBytes)))
   private val partitionDataFetchResponse2 = new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("third message".getBytes)))
@@ -88,62 +79,6 @@ object SerializationTestUtils {
   private val brokers = List(new Broker(0, Map(SecurityProtocol.PLAINTEXT -> EndPoint("localhost", 1011, SecurityProtocol.PLAINTEXT))),
                              new Broker(1, Map(SecurityProtocol.PLAINTEXT -> EndPoint("localhost", 1012, SecurityProtocol.PLAINTEXT))),
                              new Broker(2, Map(SecurityProtocol.PLAINTEXT -> EndPoint("localhost", 1013, SecurityProtocol.PLAINTEXT))))
-  private val brokerEndpoints = brokers.map(_.getBrokerEndPoint(SecurityProtocol.PLAINTEXT))
-
-  private val partitionMetaData0 = new PartitionMetadata(0, Some(brokerEndpoints.head), replicas = brokerEndpoints, isr = brokerEndpoints, errorCode = 0)
-  private val partitionMetaData1 = new PartitionMetadata(1, Some(brokerEndpoints.head), replicas = brokerEndpoints, isr = brokerEndpoints.tail, errorCode = 1)
-  private val partitionMetaData2 = new PartitionMetadata(2, Some(brokerEndpoints.head), replicas = brokerEndpoints, isr = brokerEndpoints, errorCode = 2)
-  private val partitionMetaData3 = new PartitionMetadata(3, Some(brokerEndpoints.head), replicas = brokerEndpoints, isr = brokerEndpoints.tail.tail, errorCode = 3)
-  private val partitionMetaDataSeq = Seq(partitionMetaData0, partitionMetaData1, partitionMetaData2, partitionMetaData3)
-  private val topicmetaData1 = new TopicMetadata(topic1, partitionMetaDataSeq)
-  private val topicmetaData2 = new TopicMetadata(topic2, partitionMetaDataSeq)
-
-  private val leaderAndIsr0 = new LeaderAndIsr(leader = brokers.head.id, isr = brokers.map(_.id))
-  private val leaderAndIsr1 = new LeaderAndIsr(leader = brokers.head.id, isr = brokers.tail.map(_.id))
-  private val leaderAndIsr2 = new LeaderAndIsr(leader = brokers.head.id, isr = brokers.map(_.id))
-  private val leaderAndIsr3 = new LeaderAndIsr(leader = brokers.head.id, isr = brokers.tail.map(_.id))
-
-  private val leaderIsrAndControllerEpoch0 = new LeaderIsrAndControllerEpoch(leaderAndIsr0, controllerEpoch = 0)
-  private val leaderIsrAndControllerEpoch1 = new LeaderIsrAndControllerEpoch(leaderAndIsr1, controllerEpoch = 0)
-  private val leaderIsrAndControllerEpoch2 = new LeaderIsrAndControllerEpoch(leaderAndIsr2, controllerEpoch = 0)
-  private val leaderIsrAndControllerEpoch3 = new LeaderIsrAndControllerEpoch(leaderAndIsr3, controllerEpoch = 0)
-
-  private val partitionStateInfo0 = new PartitionStateInfo(leaderIsrAndControllerEpoch0, brokers.map(_.id).toSet)
-  private val partitionStateInfo1 = new PartitionStateInfo(leaderIsrAndControllerEpoch1, brokers.map(_.id).toSet)
-  private val partitionStateInfo2 = new PartitionStateInfo(leaderIsrAndControllerEpoch2, brokers.map(_.id).toSet)
-  private val partitionStateInfo3 = new PartitionStateInfo(leaderIsrAndControllerEpoch3, brokers.map(_.id).toSet)
-
-  private val updateMetadataRequestPartitionStateInfo = collection.immutable.Map(
-    TopicAndPartition(topic1,0) -> partitionStateInfo0,
-    TopicAndPartition(topic1,1) -> partitionStateInfo1,
-    TopicAndPartition(topic1,2) -> partitionStateInfo2,
-    TopicAndPartition(topic1,3) -> partitionStateInfo3
-  )
-
-  def createTestLeaderAndIsrRequest() : LeaderAndIsrRequest = {
-    val leaderAndIsr1 = new LeaderIsrAndControllerEpoch(new LeaderAndIsr(leader1, 1, isr1, 1), 1)
-    val leaderAndIsr2 = new LeaderIsrAndControllerEpoch(new LeaderAndIsr(leader2, 1, isr2, 2), 1)
-    val map = Map(((topic1, 0), PartitionStateInfo(leaderAndIsr1, isr1.toSet)),
-                  ((topic2, 0), PartitionStateInfo(leaderAndIsr2, isr2.toSet)))
-    new LeaderAndIsrRequest(map.toMap, collection.immutable.Set[BrokerEndPoint](), 0, 1, 0, "")
-  }
-
-  def createTestLeaderAndIsrResponse() : LeaderAndIsrResponse = {
-    val responseMap = Map(((topic1, 0), ErrorMapping.NoError),
-                          ((topic2, 0), ErrorMapping.NoError))
-    new LeaderAndIsrResponse(1, responseMap)
-  }
-
-  def createTestStopReplicaRequest() : StopReplicaRequest = {
-    new StopReplicaRequest(controllerId = 0, controllerEpoch = 1, correlationId = 0, deletePartitions = true,
-                           partitions = collection.immutable.Set(TopicAndPartition(topic1, 0),TopicAndPartition(topic2, 0)))
-  }
-
-  def createTestStopReplicaResponse() : StopReplicaResponse = {
-    val responseMap = Map((TopicAndPartition(topic1, 0), ErrorMapping.NoError),
-                          (TopicAndPartition(topic2, 0), ErrorMapping.NoError))
-    new StopReplicaResponse(0, responseMap.toMap)
-  }
 
   def createTestProducerRequest: ProducerRequest = {
     new ProducerRequest(1, "client 1", 0, 1000, topicDataProducerRequest)
@@ -156,11 +91,11 @@ object SerializationTestUtils {
     ), ProducerRequest.CurrentVersion, 100)
 
   def createTestFetchRequest: FetchRequest = {
-    new FetchRequest(requestInfo = requestInfos)
+    new FetchRequest(requestInfo = requestInfos.toVector)
   }
 
   def createTestFetchResponse: FetchResponse = {
-    FetchResponse(1, topicDataFetchResponse)
+    FetchResponse(1, topicDataFetchResponse.toVector)
   }
 
   def createTestOffsetRequest = new OffsetRequest(
@@ -170,16 +105,8 @@ object SerializationTestUtils {
 
   def createTestOffsetResponse: OffsetResponse = {
     new OffsetResponse(0, collection.immutable.Map(
-      TopicAndPartition(topic1, 1) -> PartitionOffsetsResponse(ErrorMapping.NoError, Seq(1000l, 2000l, 3000l, 4000l)))
+      TopicAndPartition(topic1, 1) -> PartitionOffsetsResponse(Errors.NONE.code, Seq(1000l, 2000l, 3000l, 4000l)))
     )
-  }
-
-  def createTestTopicMetadataRequest: TopicMetadataRequest = {
-    new TopicMetadataRequest(1, 1, "client 1", Seq(topic1, topic2))
-  }
-
-  def createTestTopicMetadataResponse: TopicMetadataResponse = {
-    new TopicMetadataResponse(brokers.map(_.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)).toSeq, Seq(topicmetaData1, topicmetaData2), 1)
   }
 
   def createTestOffsetCommitRequestV2: OffsetCommitRequest = {
@@ -213,8 +140,8 @@ object SerializationTestUtils {
   }
 
   def createTestOffsetCommitResponse: OffsetCommitResponse = {
-    new OffsetCommitResponse(collection.immutable.Map(TopicAndPartition(topic1, 0) -> ErrorMapping.NoError,
-                                 TopicAndPartition(topic1, 1) -> ErrorMapping.NoError))
+    new OffsetCommitResponse(collection.immutable.Map(TopicAndPartition(topic1, 0) -> Errors.NONE.code,
+                                 TopicAndPartition(topic1, 1) -> Errors.NONE.code))
   }
 
   def createTestOffsetFetchRequest: OffsetFetchRequest = {
@@ -226,8 +153,8 @@ object SerializationTestUtils {
 
   def createTestOffsetFetchResponse: OffsetFetchResponse = {
     new OffsetFetchResponse(collection.immutable.Map(
-      TopicAndPartition(topic1, 0) -> OffsetMetadataAndError(42L, "some metadata", ErrorMapping.NoError),
-      TopicAndPartition(topic1, 1) -> OffsetMetadataAndError(100L, OffsetMetadata.NoMetadata, ErrorMapping.UnknownTopicOrPartitionCode)
+      TopicAndPartition(topic1, 0) -> OffsetMetadataAndError(42L, "some metadata", Errors.NONE.code),
+      TopicAndPartition(topic1, 1) -> OffsetMetadataAndError(100L, OffsetMetadata.NoMetadata, Errors.UNKNOWN_TOPIC_OR_PARTITION.code)
     ))
   }
 
@@ -236,38 +163,16 @@ object SerializationTestUtils {
   }
 
   def createConsumerMetadataResponse: GroupCoordinatorResponse = {
-    GroupCoordinatorResponse(Some(brokers.head.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)), ErrorMapping.NoError, 0)
-  }
-
-  def createUpdateMetadataRequest(versionId: Short): UpdateMetadataRequest = {
-    UpdateMetadataRequest(
-      versionId,
-      correlationId = 0,
-      clientId = "client1",
-      controllerId = 0,
-      controllerEpoch = 0,
-      partitionStateInfos = updateMetadataRequestPartitionStateInfo,
-      brokers.toSet
-    )
-  }
-
-  def createUpdateMetadataResponse: UpdateMetadataResponse = {
-    UpdateMetadataResponse( correlationId = 0, errorCode = 0)
+    GroupCoordinatorResponse(Some(brokers.head.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)), Errors.NONE.code, 0)
   }
 }
 
 class RequestResponseSerializationTest extends JUnitSuite {
-  private val leaderAndIsrRequest = SerializationTestUtils.createTestLeaderAndIsrRequest
-  private val leaderAndIsrResponse = SerializationTestUtils.createTestLeaderAndIsrResponse
-  private val stopReplicaRequest = SerializationTestUtils.createTestStopReplicaRequest
-  private val stopReplicaResponse = SerializationTestUtils.createTestStopReplicaResponse
   private val producerRequest = SerializationTestUtils.createTestProducerRequest
   private val producerResponse = SerializationTestUtils.createTestProducerResponse
   private val fetchRequest = SerializationTestUtils.createTestFetchRequest
   private val offsetRequest = SerializationTestUtils.createTestOffsetRequest
   private val offsetResponse = SerializationTestUtils.createTestOffsetResponse
-  private val topicMetadataRequest = SerializationTestUtils.createTestTopicMetadataRequest
-  private val topicMetadataResponse = SerializationTestUtils.createTestTopicMetadataResponse
   private val offsetCommitRequestV0 = SerializationTestUtils.createTestOffsetCommitRequestV0
   private val offsetCommitRequestV1 = SerializationTestUtils.createTestOffsetCommitRequestV1
   private val offsetCommitRequestV2 = SerializationTestUtils.createTestOffsetCommitRequestV2
@@ -277,23 +182,16 @@ class RequestResponseSerializationTest extends JUnitSuite {
   private val consumerMetadataRequest = SerializationTestUtils.createConsumerMetadataRequest
   private val consumerMetadataResponse = SerializationTestUtils.createConsumerMetadataResponse
   private val consumerMetadataResponseNoCoordinator = GroupCoordinatorResponse(None, ErrorMapping.ConsumerCoordinatorNotAvailableCode, 0)
-  private val updateMetadataRequestV0 = SerializationTestUtils.createUpdateMetadataRequest(0)
-  private val updateMetadataRequestV1 = SerializationTestUtils.createUpdateMetadataRequest(1)
-  private val updateMetdataResponse = SerializationTestUtils.createUpdateMetadataResponse
-
 
   @Test
   def testSerializationAndDeserialization() {
 
     val requestsAndResponses =
-      collection.immutable.Seq(leaderAndIsrRequest, leaderAndIsrResponse, stopReplicaRequest,
-                               stopReplicaResponse, producerRequest, producerResponse,
-                               fetchRequest, offsetRequest, offsetResponse, topicMetadataRequest,
-                               topicMetadataResponse,
+      collection.immutable.Seq(producerRequest, producerResponse,
+                               fetchRequest, offsetRequest, offsetResponse,
                                offsetCommitRequestV0, offsetCommitRequestV1, offsetCommitRequestV2,
                                offsetCommitResponse, offsetFetchRequest, offsetFetchResponse,
                                consumerMetadataRequest, consumerMetadataResponse,
-                               updateMetadataRequestV0, updateMetadataRequestV1, updateMetdataResponse,
                                consumerMetadataResponseNoCoordinator)
 
     requestsAndResponses.foreach { original =>
@@ -333,13 +231,14 @@ class RequestResponseSerializationTest extends JUnitSuite {
   def testFetchResponseVersion() {
     val oldClientResponse = FetchResponse(1, Map(
       TopicAndPartition("t1", 0) -> new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("first message".getBytes)))
-    ), 0)
+    ).toVector, 0)
 
     val newClientResponse = FetchResponse(1, Map(
       TopicAndPartition("t1", 0) -> new FetchResponsePartitionData(messages = new ByteBufferMessageSet(new Message("first message".getBytes)))
-    ), 1, 100)
+    ).toVector, 1, 100)
 
     // new response should have 4 bytes more than the old response since delayTime is an INT32
     assertEquals(oldClientResponse.sizeInBytes + 4, newClientResponse.sizeInBytes)
   }
+
 }

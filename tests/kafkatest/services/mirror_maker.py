@@ -1,4 +1,3 @@
-
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
 # this work for additional information regarding copyright ownership.
@@ -14,13 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import subprocess
+
 from ducktape.services.service import Service
 from ducktape.utils.util import wait_until
 
-from kafkatest.services.kafka.directory import kafka_dir
-
-import os
-import subprocess
+from kafkatest.directory_layout.kafka_path import KafkaPathResolverMixin
 
 """
 0.8.2.1 MirrorMaker options
@@ -56,7 +55,7 @@ Option                                  Description
 """
 
 
-class MirrorMaker(Service):
+class MirrorMaker(KafkaPathResolverMixin, Service):
 
     # Root directory for persistent output
     PERSISTENT_ROOT = "/mnt/mirror_maker"
@@ -73,8 +72,8 @@ class MirrorMaker(Service):
         }
 
     def __init__(self, context, num_nodes, source, target, whitelist=None, blacklist=None, num_streams=1,
-                 new_consumer=False, consumer_timeout_ms=None, offsets_storage="kafka",
-                 offset_commit_interval_ms=60000):
+                 new_consumer=True, consumer_timeout_ms=None, offsets_storage="kafka",
+                 offset_commit_interval_ms=60000, log_level="DEBUG", producer_interceptor_classes=None):
         """
         MirrorMaker mirrors messages from one or more source clusters to a single destination cluster.
 
@@ -92,7 +91,7 @@ class MirrorMaker(Service):
             offset_commit_interval_ms:  how frequently the mirror maker consumer commits offsets
         """
         super(MirrorMaker, self).__init__(context, num_nodes=num_nodes)
-        self.log_level = "DEBUG"
+        self.log_level = log_level
         self.new_consumer = new_consumer
         self.consumer_timeout_ms = consumer_timeout_ms
         self.num_streams = num_streams
@@ -109,11 +108,22 @@ class MirrorMaker(Service):
             raise Exception("offsets_storage should be 'kafka' or 'zookeeper'. Instead found %s" % self.offsets_storage)
 
         self.offset_commit_interval_ms = offset_commit_interval_ms
+        self.producer_interceptor_classes = producer_interceptor_classes
+        self.external_jars = None
+
+        # These properties are potentially used by third-party tests.
+        self.source_auto_offset_reset = None
+        self.partition_assignment_strategy = None
 
     def start_cmd(self, node):
         cmd = "export LOG_DIR=%s;" % MirrorMaker.LOG_DIR
         cmd += " export KAFKA_LOG4J_OPTS=\"-Dlog4j.configuration=file:%s\";" % MirrorMaker.LOG4J_CONFIG
-        cmd += " /opt/%s/bin/kafka-run-class.sh kafka.tools.MirrorMaker" % kafka_dir(node)
+        cmd += " export KAFKA_OPTS=%s;" % self.security_config.kafka_opts
+        # add external dependencies, for instance for interceptors
+        if self.external_jars is not None:
+            cmd += "for file in %s; do CLASSPATH=$CLASSPATH:$file; done; " % self.external_jars
+            cmd += "export CLASSPATH; "
+        cmd += " %s kafka.tools.MirrorMaker" % self.path.script("kafka-run-class.sh", node)
         cmd += " --consumer.config %s" % MirrorMaker.CONSUMER_CONFIG
         cmd += " --producer.config %s" % MirrorMaker.PRODUCER_CONFIG
         cmd += " --offset.commit.interval.ms %s" % str(self.offset_commit_interval_ms)
@@ -126,8 +136,6 @@ class MirrorMaker(Service):
             cmd += " --whitelist=\"%s\"" % self.whitelist
         if self.blacklist is not None:
             cmd += " --blacklist=\"%s\"" % self.blacklist
-        if self.new_consumer:
-            cmd += " --new.consumer"
 
         cmd += " 1>> %s 2>> %s &" % (MirrorMaker.LOG_FILE, MirrorMaker.LOG_FILE)
         return cmd
@@ -147,15 +155,22 @@ class MirrorMaker(Service):
         node.account.ssh("mkdir -p %s" % MirrorMaker.PERSISTENT_ROOT, allow_fail=False)
         node.account.ssh("mkdir -p %s" % MirrorMaker.LOG_DIR, allow_fail=False)
 
+        self.security_config = self.source.security_config.client_config()
+        self.security_config.setup_node(node)
+
         # Create, upload one consumer config file for source cluster
         consumer_props = self.render("mirror_maker_consumer.properties")
+        consumer_props += str(self.security_config)
+
         node.account.create_file(MirrorMaker.CONSUMER_CONFIG, consumer_props)
         self.logger.info("Mirrormaker consumer props:\n" + consumer_props)
 
         # Create, upload producer properties file for target cluster
         producer_props = self.render('mirror_maker_producer.properties')
+        producer_props += str(self.security_config)
         self.logger.info("Mirrormaker producer props:\n" + producer_props)
         node.account.create_file(MirrorMaker.PRODUCER_CONFIG, producer_props)
+
 
         # Create and upload log properties
         log_config = self.render('tools_log4j.properties', log_file=MirrorMaker.LOG_FILE)
@@ -180,3 +195,4 @@ class MirrorMaker(Service):
                              (self.__class__.__name__, node.account))
         node.account.kill_process("java", clean_shutdown=False, allow_fail=True)
         node.account.ssh("rm -rf %s" % MirrorMaker.PERSISTENT_ROOT, allow_fail=False)
+        self.security_config.clean_node(node)

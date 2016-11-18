@@ -24,6 +24,7 @@ import org.apache.kafka.connect.errors.DataException;
 import java.util.Map;
 
 public class OffsetUtils {
+    @SuppressWarnings("unchecked")
     public static void validateFormat(Object offsetData) {
         if (offsetData == null)
             return;
@@ -47,6 +48,8 @@ public class OffsetUtils {
             if (value == null)
                 continue;
             Schema.Type schemaType = ConnectSchema.schemaType(value.getClass());
+            if (schemaType == null)
+                throw new DataException("Offsets may only contain primitive types as values, but field " + entry.getKey() + " contains " + value.getClass());
             if (!schemaType.isPrimitive())
                 throw new DataException("Offsets may only contain primitive types as values, but field " + entry.getKey() + " contains " + schemaType);
         }

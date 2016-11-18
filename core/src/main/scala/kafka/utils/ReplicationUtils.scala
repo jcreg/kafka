@@ -21,7 +21,6 @@ import kafka.api.LeaderAndIsr
 import kafka.common.TopicAndPartition
 import kafka.controller.{IsrChangeNotificationListener, LeaderIsrAndControllerEpoch}
 import kafka.utils.ZkUtils._
-import org.I0Itec.zkclient.ZkClient
 import org.apache.zookeeper.data.Stat
 
 import scala.collection._
@@ -59,13 +58,13 @@ object ReplicationUtils extends Logging {
           (expectedLeader,writtenLeader) match {
             case (Some(expectedLeader),Some(writtenLeader)) =>
               if(expectedLeader == writtenLeader)
-                return (true,writtenStat.getVersion())
+                return (true, writtenStat.getVersion())
             case _ =>
           }
         case None =>
       }
     } catch {
-      case e1: Exception =>
+      case _: Exception =>
     }
     (false,-1)
   }

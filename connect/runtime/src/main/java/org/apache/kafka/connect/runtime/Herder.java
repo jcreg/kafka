@@ -17,9 +17,12 @@
 
 package org.apache.kafka.connect.runtime;
 
+import org.apache.kafka.connect.runtime.rest.entities.ConfigInfos;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorInfo;
+import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
 import org.apache.kafka.connect.runtime.rest.entities.TaskInfo;
 import org.apache.kafka.connect.util.Callback;
+import org.apache.kafka.connect.util.ConnectorTaskId;
 
 import java.util.Collection;
 import java.util.List;
@@ -58,10 +61,10 @@ public interface Herder {
      * from the current configuration. However, note
      *
      * @returns A list of connector names
-     * @throws org.apache.kafka.connect.runtime.distributed.NotLeaderException if this node can not resolve the request
+     * @throws org.apache.kafka.connect.runtime.distributed.RequestTargetException if this node can not resolve the request
      *         (e.g., because it has not joined the cluster or does not have configs in sync with the group) and it is
-     *         also not the leader
-     * @throws ConnectException if this node is the leader, but still cannot resolve the
+     *         not the leader or the task owner (e.g., task restart must be handled by the worker which owns the task)
+     * @throws org.apache.kafka.connect.errors.ConnectException if this node is the leader, but still cannot resolve the
      *         request (e.g., it is not in sync with other worker's config state)
      */
     void connectors(Callback<Collection<String>> callback);
@@ -79,7 +82,7 @@ public interface Herder {
     void connectorConfig(String connName, Callback<Map<String, String>> callback);
 
     /**
-     * Set the configuration for a connector. This supports creation, update, and deletion.
+     * Set the configuration for a connector. This supports creation and updating.
      * @param connName name of the connector
      * @param config the connectors configuration, or null if deleting the connector
      * @param allowReplace if true, allow overwriting previous configs; if false, throw AlreadyExistsException if a connector
@@ -87,6 +90,13 @@ public interface Herder {
      * @param callback callback to invoke when the configuration has been written
      */
     void putConnectorConfig(String connName, Map<String, String> config, boolean allowReplace, Callback<Created<ConnectorInfo>> callback);
+
+    /**
+     * Delete a connector and its configuration.
+     * @param connName name of the connector
+     * @param callback callback to invoke when the configuration has been written
+     */
+    void deleteConnectorConfig(String connName, Callback<Created<ConnectorInfo>> callback);
 
     /**
      * Requests reconfiguration of the task. This should only be triggered by
@@ -112,6 +122,52 @@ public interface Herder {
      * @param callback callback to invoke upon completion
      */
     void putTaskConfigs(String connName, List<Map<String, String>> configs, Callback<Void> callback);
+
+    /**
+     * Lookup the current status of a connector.
+     * @param connName name of the connector
+     */
+    ConnectorStateInfo connectorStatus(String connName);
+
+    /**
+     * Lookup the status of the a task.
+     * @param id id of the task
+     */
+    ConnectorStateInfo.TaskState taskStatus(ConnectorTaskId id);
+
+    /**
+     * Validate the provided connector config values against the configuration definition.
+     * @param connectorConfig the provided connector config values
+     */
+    ConfigInfos validateConnectorConfig(Map<String, String> connectorConfig);
+
+    /**
+     * Restart the task with the given id.
+     * @param id id of the task
+     * @param cb callback to invoke upon completion
+     */
+    void restartTask(ConnectorTaskId id, Callback<Void> cb);
+
+    /**
+     * Restart the connector.
+     * @param connName name of the connector
+     * @param cb callback to invoke upon completion
+     */
+    void restartConnector(String connName, Callback<Void> cb);
+
+    /**
+     * Pause the connector. This call will asynchronously suspend processing by the connector and all
+     * of its tasks.
+     * @param connector name of the connector
+     */
+    void pauseConnector(String connector);
+
+    /**
+     * Resume the connector. This call will asynchronously start the connector and its tasks (if
+     * not started already).
+     * @param connector name of the connector
+     */
+    void resumeConnector(String connector);
 
 
     class Created<T> {

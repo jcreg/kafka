@@ -67,7 +67,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
         this.exception = null;
         this.wakeup = new AtomicBoolean(false);
     }
-    
+
     @Override
     public Set<TopicPartition> assignment() {
         return this.subscriptions.assignedPartitions();
@@ -86,7 +86,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     }
 
     @Override
-    public void subscribe(List<String> topics) {
+    public void subscribe(Collection<String> topics) {
         subscribe(topics, new NoOpConsumerRebalanceListener());
     }
 
@@ -94,26 +94,26 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     public void subscribe(Pattern pattern, final ConsumerRebalanceListener listener) {
         ensureNotClosed();
         this.subscriptions.subscribe(pattern, listener);
-        List<String> topicsToSubscribe = new ArrayList<>();
+        Set<String> topicsToSubscribe = new HashSet<>();
         for (String topic: partitions.keySet()) {
             if (pattern.matcher(topic).matches() &&
                 !subscriptions.subscription().contains(topic))
                 topicsToSubscribe.add(topic);
         }
         ensureNotClosed();
-        this.subscriptions.changeSubscription(topicsToSubscribe);
+        this.subscriptions.subscribeFromPattern(topicsToSubscribe);
     }
 
     @Override
-    public void subscribe(List<String> topics, final ConsumerRebalanceListener listener) {
+    public void subscribe(Collection<String> topics, final ConsumerRebalanceListener listener) {
         ensureNotClosed();
-        this.subscriptions.subscribe(topics, listener);
+        this.subscriptions.subscribe(new HashSet<>(topics), listener);
     }
 
     @Override
-    public void assign(List<TopicPartition> partitions) {
+    public void assign(Collection<TopicPartition> partitions) {
         ensureNotClosed();
-        this.subscriptions.assignFromUser(partitions);
+        this.subscriptions.assignFromUser(new HashSet<>(partitions));
     }
 
     @Override
@@ -154,7 +154,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
             if (!subscriptions.isPaused(entry.getKey())) {
                 List<ConsumerRecord<K, V>> recs = entry.getValue();
                 if (!recs.isEmpty())
-                    this.subscriptions.consumed(entry.getKey(), recs.get(recs.size() - 1).offset() + 1);
+                    this.subscriptions.position(entry.getKey(), recs.get(recs.size() - 1).offset() + 1);
             }
         }
 
@@ -229,16 +229,16 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
         ensureNotClosed();
         if (!this.subscriptions.isAssigned(partition))
             throw new IllegalArgumentException("You can only check the position for partitions assigned to this consumer.");
-        Long offset = this.subscriptions.consumed(partition);
+        Long offset = this.subscriptions.position(partition);
         if (offset == null) {
             updateFetchPosition(partition);
-            offset = this.subscriptions.consumed(partition);
+            offset = this.subscriptions.position(partition);
         }
         return offset;
     }
 
     @Override
-    public void seekToBeginning(TopicPartition... partitions) {
+    public void seekToBeginning(Collection<TopicPartition> partitions) {
         ensureNotClosed();
         for (TopicPartition tp : partitions)
             subscriptions.needOffsetReset(tp, OffsetResetStrategy.EARLIEST);
@@ -249,7 +249,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     }
 
     @Override
-    public void seekToEnd(TopicPartition... partitions) {
+    public void seekToEnd(Collection<TopicPartition> partitions) {
         ensureNotClosed();
         for (TopicPartition tp : partitions)
             subscriptions.needOffsetReset(tp, OffsetResetStrategy.LATEST);
@@ -268,11 +268,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     @Override
     public List<PartitionInfo> partitionsFor(String topic) {
         ensureNotClosed();
-        List<PartitionInfo> parts = this.partitions.get(topic);
-        if (parts == null)
-            return Collections.emptyList();
-        else
-            return parts;
+        return this.partitions.get(topic);
     }
 
     @Override
@@ -287,7 +283,7 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     }
 
     @Override
-    public void pause(TopicPartition... partitions) {
+    public void pause(Collection<TopicPartition> partitions) {
         for (TopicPartition partition : partitions) {
             subscriptions.pause(partition);
             paused.add(partition);
@@ -295,11 +291,40 @@ public class MockConsumer<K, V> implements Consumer<K, V> {
     }
 
     @Override
-    public void resume(TopicPartition... partitions) {
+    public void resume(Collection<TopicPartition> partitions) {
         for (TopicPartition partition : partitions) {
             subscriptions.resume(partition);
             paused.remove(partition);
         }
+    }
+
+    @Override
+    public Map<TopicPartition, OffsetAndTimestamp> offsetsForTimes(Map<TopicPartition, Long> timestampsToSearch) {
+        throw new UnsupportedOperationException("Not implemented yet.");
+    }
+
+    @Override
+    public Map<TopicPartition, Long> beginningOffsets(Collection<TopicPartition> partitions) {
+        Map<TopicPartition, Long> result = new HashMap<>();
+        for (TopicPartition tp : partitions) {
+            Long beginningOffset = beginningOffsets.get(tp);
+            if (beginningOffset == null)
+                throw new IllegalStateException("The partition " + tp + " does not have a beginning offset.");
+            result.put(tp, beginningOffset);
+        }
+        return result;
+    }
+
+    @Override
+    public Map<TopicPartition, Long> endOffsets(Collection<TopicPartition> partitions) {
+        Map<TopicPartition, Long> result = new HashMap<>();
+        for (TopicPartition tp : partitions) {
+            Long endOffset = endOffsets.get(tp);
+            if (endOffset == null)
+                throw new IllegalStateException("The partition " + tp + " does not have an end offset.");
+            result.put(tp, endOffset);
+        }
+        return result;
     }
 
     @Override

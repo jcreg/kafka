@@ -16,7 +16,6 @@
  **/
 package org.apache.kafka.connect.runtime.distributed;
 
-import org.apache.kafka.clients.ClientRequest;
 import org.apache.kafka.clients.Metadata;
 import org.apache.kafka.clients.MockClient;
 import org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient;
@@ -24,13 +23,15 @@ import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.GroupCoordinatorResponse;
+import org.apache.kafka.common.requests.JoinGroupRequest.ProtocolMetadata;
 import org.apache.kafka.common.requests.JoinGroupResponse;
 import org.apache.kafka.common.requests.SyncGroupRequest;
 import org.apache.kafka.common.requests.SyncGroupResponse;
 import org.apache.kafka.common.utils.MockTime;
-import org.apache.kafka.connect.storage.KafkaConfigStorage;
+import org.apache.kafka.connect.runtime.TargetState;
+import org.apache.kafka.connect.storage.KafkaConfigBackingStore;
 import org.apache.kafka.connect.util.ConnectorTaskId;
 import org.apache.kafka.test.TestUtils;
 import org.easymock.EasyMock;
@@ -46,7 +47,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -66,19 +66,18 @@ public class WorkerCoordinatorTest {
 
     private String groupId = "test-group";
     private int sessionTimeoutMs = 10;
+    private int rebalanceTimeoutMs = 60;
     private int heartbeatIntervalMs = 2;
     private long retryBackoffMs = 100;
-    private long requestTimeoutMs = 5000;
     private MockTime time;
     private MockClient client;
     private Cluster cluster = TestUtils.singletonCluster("topic", 1);
     private Node node = cluster.nodes().get(0);
     private Metadata metadata;
     private Metrics metrics;
-    private Map<String, String> metricTags = new LinkedHashMap<>();
     private ConsumerNetworkClient consumerClient;
     private MockRebalanceListener rebalanceListener;
-    @Mock private KafkaConfigStorage configStorage;
+    @Mock private KafkaConfigBackingStore configStorage;
     private WorkerCoordinator coordinator;
 
     private ClusterConfigState configState1;
@@ -90,22 +89,21 @@ public class WorkerCoordinatorTest {
         this.client = new MockClient(time);
         this.metadata = new Metadata(0, Long.MAX_VALUE);
         this.metadata.update(cluster, time.milliseconds());
-        this.consumerClient = new ConsumerNetworkClient(client, metadata, time, 100);
+        this.consumerClient = new ConsumerNetworkClient(client, metadata, time, 100, 1000);
         this.metrics = new Metrics(time);
         this.rebalanceListener = new MockRebalanceListener();
-        this.configStorage = PowerMock.createMock(KafkaConfigStorage.class);
+        this.configStorage = PowerMock.createMock(KafkaConfigBackingStore.class);
 
         client.setNode(node);
 
         this.coordinator = new WorkerCoordinator(consumerClient,
                 groupId,
+                rebalanceTimeoutMs,
                 sessionTimeoutMs,
                 heartbeatIntervalMs,
                 metrics,
                 "consumer" + groupId,
-                metricTags,
                 time,
-                requestTimeoutMs,
                 retryBackoffMs,
                 LEADER_URL,
                 configStorage,
@@ -114,6 +112,7 @@ public class WorkerCoordinatorTest {
         configState1 = new ClusterConfigState(
                 1L, Collections.singletonMap(connectorId, 1),
                 Collections.singletonMap(connectorId, (Map<String, String>) new HashMap<String, String>()),
+                Collections.singletonMap(connectorId, TargetState.STARTED),
                 Collections.singletonMap(taskId0, (Map<String, String>) new HashMap<String, String>()),
                 Collections.<String>emptySet()
         );
@@ -123,6 +122,9 @@ public class WorkerCoordinatorTest {
         Map<String, Map<String, String>> configState2ConnectorConfigs = new HashMap<>();
         configState2ConnectorConfigs.put(connectorId, new HashMap<String, String>());
         configState2ConnectorConfigs.put(connectorId2, new HashMap<String, String>());
+        Map<String, TargetState> targetStates = new HashMap<>();
+        targetStates.put(connectorId, TargetState.STARTED);
+        targetStates.put(connectorId2, TargetState.STARTED);
         Map<ConnectorTaskId, Map<String, String>> configState2TaskConfigs = new HashMap<>();
         configState2TaskConfigs.put(taskId0, new HashMap<String, String>());
         configState2TaskConfigs.put(taskId1, new HashMap<String, String>());
@@ -130,6 +132,7 @@ public class WorkerCoordinatorTest {
         configState2 = new ClusterConfigState(
                 2L, configState2ConnectorTaskCounts,
                 configState2ConnectorConfigs,
+                targetStates,
                 configState2TaskConfigs,
                 Collections.<String>emptySet()
         );
@@ -149,9 +152,12 @@ public class WorkerCoordinatorTest {
 
         PowerMock.replayAll();
 
-        LinkedHashMap<String, ByteBuffer> serialized = coordinator.metadata();
+        List<ProtocolMetadata> serialized = coordinator.metadata();
         assertEquals(1, serialized.size());
-        ConnectProtocol.WorkerState state = ConnectProtocol.deserializeMetadata(serialized.get(WorkerCoordinator.DEFAULT_SUBPROTOCOL));
+
+        ProtocolMetadata defaultMetadata = serialized.get(0);
+        assertEquals(WorkerCoordinator.DEFAULT_SUBPROTOCOL, defaultMetadata.name());
+        ConnectProtocol.WorkerState state = ConnectProtocol.deserializeMetadata(defaultMetadata.metadata());
         assertEquals(1, state.offset());
 
         PowerMock.verifyAll();
@@ -165,8 +171,8 @@ public class WorkerCoordinatorTest {
 
         final String consumerId = "leader";
 
-        client.prepareResponse(groupMetadataResponse(node, Errors.NONE.code()));
-        coordinator.ensureCoordinatorKnown();
+        client.prepareResponse(groupCoordinatorResponse(node, Errors.NONE.code()));
+        coordinator.ensureCoordinatorReady();
 
         // normal join group
         Map<String, Long> memberConfigOffsets = new HashMap<>();
@@ -175,8 +181,8 @@ public class WorkerCoordinatorTest {
         client.prepareResponse(joinGroupLeaderResponse(1, consumerId, memberConfigOffsets, Errors.NONE.code()));
         client.prepareResponse(new MockClient.RequestMatcher() {
             @Override
-            public boolean matches(ClientRequest request) {
-                SyncGroupRequest sync = new SyncGroupRequest(request.request().body());
+            public boolean matches(AbstractRequest body) {
+                SyncGroupRequest sync = (SyncGroupRequest) body;
                 return sync.memberId().equals(consumerId) &&
                         sync.generationId() == 1 &&
                         sync.groupAssignment().containsKey(consumerId);
@@ -205,15 +211,15 @@ public class WorkerCoordinatorTest {
 
         final String memberId = "member";
 
-        client.prepareResponse(groupMetadataResponse(node, Errors.NONE.code()));
-        coordinator.ensureCoordinatorKnown();
+        client.prepareResponse(groupCoordinatorResponse(node, Errors.NONE.code()));
+        coordinator.ensureCoordinatorReady();
 
         // normal join group
         client.prepareResponse(joinGroupFollowerResponse(1, memberId, "leader", Errors.NONE.code()));
         client.prepareResponse(new MockClient.RequestMatcher() {
             @Override
-            public boolean matches(ClientRequest request) {
-                SyncGroupRequest sync = new SyncGroupRequest(request.request().body());
+            public boolean matches(AbstractRequest body) {
+                SyncGroupRequest sync = (SyncGroupRequest) body;
                 return sync.memberId().equals(memberId) &&
                         sync.generationId() == 1 &&
                         sync.groupAssignment().isEmpty();
@@ -246,15 +252,15 @@ public class WorkerCoordinatorTest {
 
         final String memberId = "member";
 
-        client.prepareResponse(groupMetadataResponse(node, Errors.NONE.code()));
-        coordinator.ensureCoordinatorKnown();
+        client.prepareResponse(groupCoordinatorResponse(node, Errors.NONE.code()));
+        coordinator.ensureCoordinatorReady();
 
         // config mismatch results in assignment error
         client.prepareResponse(joinGroupFollowerResponse(1, memberId, "leader", Errors.NONE.code()));
         MockClient.RequestMatcher matcher = new MockClient.RequestMatcher() {
             @Override
-            public boolean matches(ClientRequest request) {
-                SyncGroupRequest sync = new SyncGroupRequest(request.request().body());
+            public boolean matches(AbstractRequest body) {
+                SyncGroupRequest sync = (SyncGroupRequest) body;
                 return sync.memberId().equals(memberId) &&
                         sync.generationId() == 1 &&
                         sync.groupAssignment().isEmpty();
@@ -277,8 +283,8 @@ public class WorkerCoordinatorTest {
 
         PowerMock.replayAll();
 
-        client.prepareResponse(groupMetadataResponse(node, Errors.NONE.code()));
-        coordinator.ensureCoordinatorKnown();
+        client.prepareResponse(groupCoordinatorResponse(node, Errors.NONE.code()));
+        coordinator.ensureCoordinatorReady();
 
         // join the group once
         client.prepareResponse(joinGroupFollowerResponse(1, "consumer", "leader", Errors.NONE.code()));
@@ -385,12 +391,11 @@ public class WorkerCoordinatorTest {
     }
 
 
-    private Struct groupMetadataResponse(Node node, short error) {
-        GroupCoordinatorResponse response = new GroupCoordinatorResponse(error, node);
-        return response.toStruct();
+    private GroupCoordinatorResponse groupCoordinatorResponse(Node node, short error) {
+        return new GroupCoordinatorResponse(error, node);
     }
 
-    private Struct joinGroupLeaderResponse(int generationId, String memberId,
+    private JoinGroupResponse joinGroupLeaderResponse(int generationId, String memberId,
                                            Map<String, Long> configOffsets, short error) {
         Map<String, ByteBuffer> metadata = new HashMap<>();
         for (Map.Entry<String, Long> configStateEntry : configOffsets.entrySet()) {
@@ -400,21 +405,20 @@ public class WorkerCoordinatorTest {
             ByteBuffer buf = ConnectProtocol.serializeMetadata(new ConnectProtocol.WorkerState(memberUrl, configOffset));
             metadata.put(configStateEntry.getKey(), buf);
         }
-        return new JoinGroupResponse(error, generationId, WorkerCoordinator.DEFAULT_SUBPROTOCOL, memberId, memberId, metadata).toStruct();
+        return new JoinGroupResponse(error, generationId, WorkerCoordinator.DEFAULT_SUBPROTOCOL, memberId, memberId, metadata);
     }
 
-    private Struct joinGroupFollowerResponse(int generationId, String memberId, String leaderId, short error) {
+    private JoinGroupResponse joinGroupFollowerResponse(int generationId, String memberId, String leaderId, short error) {
         return new JoinGroupResponse(error, generationId, WorkerCoordinator.DEFAULT_SUBPROTOCOL, memberId, leaderId,
-                Collections.<String, ByteBuffer>emptyMap()).toStruct();
+                Collections.<String, ByteBuffer>emptyMap());
     }
 
-    private Struct syncGroupResponse(short assignmentError, String leader, long configOffset, List<String> connectorIds,
+    private SyncGroupResponse syncGroupResponse(short assignmentError, String leader, long configOffset, List<String> connectorIds,
                                      List<ConnectorTaskId> taskIds, short error) {
         ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(assignmentError, leader, LEADER_URL, configOffset, connectorIds, taskIds);
         ByteBuffer buf = ConnectProtocol.serializeAssignment(assignment);
-        return new SyncGroupResponse(error, buf).toStruct();
+        return new SyncGroupResponse(error, buf);
     }
-
 
     private static class MockRebalanceListener implements WorkerRebalanceListener {
         public ConnectProtocol.Assignment assignment = null;
@@ -427,7 +431,7 @@ public class WorkerCoordinatorTest {
         public int assignedCount = 0;
 
         @Override
-        public void onAssigned(ConnectProtocol.Assignment assignment) {
+        public void onAssigned(ConnectProtocol.Assignment assignment, int generation) {
             this.assignment = assignment;
             assignedCount++;
         }

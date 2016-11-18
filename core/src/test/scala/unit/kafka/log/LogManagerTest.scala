@@ -5,7 +5,7 @@
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
- * 
+ *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
@@ -23,6 +23,8 @@ import java.util.Properties
 import kafka.common._
 import kafka.server.OffsetCheckpoint
 import kafka.utils._
+import org.apache.kafka.common.errors.OffsetOutOfRangeException
+import org.apache.kafka.common.utils.Utils
 import org.junit.Assert._
 import org.junit.{After, Before, Test}
 
@@ -53,10 +55,10 @@ class LogManagerTest {
   def tearDown() {
     if(logManager != null)
       logManager.shutdown()
-    CoreUtils.rm(logDir)
-    logManager.logDirs.foreach(CoreUtils.rm(_))
+    Utils.delete(logDir)
+    logManager.logDirs.foreach(Utils.delete)
   }
-  
+
   /**
    * Test that getOrCreateLog on a non-existent log creates a new log and that we can append to the new log.
    */
@@ -86,26 +88,26 @@ class LogManagerTest {
   def testCleanupExpiredSegments() {
     val log = logManager.createLog(TopicAndPartition(name, 0), logConfig)
     var offset = 0L
-    for(i <- 0 until 200) {
-      var set = TestUtils.singleMessageSet("test".getBytes())
+    for(_ <- 0 until 200) {
+      val set = TestUtils.singleMessageSet("test".getBytes())
       val info = log.append(set)
       offset = info.lastOffset
     }
     assertTrue("There should be more than one segment now.", log.numberOfSegments > 1)
-    
+
     log.logSegments.foreach(_.log.file.setLastModified(time.milliseconds))
-    
+
     time.sleep(maxLogAgeMs + 1)
     assertEquals("Now there should only be only one segment in the index.", 1, log.numberOfSegments)
     time.sleep(log.config.fileDeleteDelayMs + 1)
-    assertEquals("Files should have been deleted", log.numberOfSegments * 2, log.dir.list.length)
+    assertEquals("Files should have been deleted", log.numberOfSegments * 3, log.dir.list.length)
     assertEquals("Should get empty fetch off new log.", 0, log.read(offset+1, 1024).messageSet.sizeInBytes)
 
     try {
       log.read(0, 1024)
       fail("Should get exception from fetching earlier.")
     } catch {
-      case e: OffsetOutOfRangeException => "This is good."
+      case _: OffsetOutOfRangeException => // This is good.
     }
     // log should still be appendable
     log.append(TestUtils.singleMessageSet("test".getBytes()))
@@ -132,7 +134,7 @@ class LogManagerTest {
 
     // add a bunch of messages that should be larger than the retentionSize
     val numMessages = 200
-    for(i <- 0 until numMessages) {
+    for (_ <- 0 until numMessages) {
       val set = TestUtils.singleMessageSet("test".getBytes())
       val info = log.append(set)
       offset = info.firstOffset
@@ -144,16 +146,41 @@ class LogManagerTest {
     time.sleep(logManager.InitialTaskDelayMs)
     assertEquals("Now there should be exactly 6 segments", 6, log.numberOfSegments)
     time.sleep(log.config.fileDeleteDelayMs + 1)
-    assertEquals("Files should have been deleted", log.numberOfSegments * 2, log.dir.list.length)
+    assertEquals("Files should have been deleted", log.numberOfSegments * 3, log.dir.list.length)
     assertEquals("Should get empty fetch off new log.", 0, log.read(offset + 1, 1024).messageSet.sizeInBytes)
     try {
       log.read(0, 1024)
       fail("Should get exception from fetching earlier.")
     } catch {
-      case e: OffsetOutOfRangeException => "This is good."
+      case _: OffsetOutOfRangeException => // This is good.
     }
     // log should still be appendable
     log.append(TestUtils.singleMessageSet("test".getBytes()))
+  }
+
+  /**
+    * Ensures that LogManager only runs on logs with cleanup.policy=delete
+    * LogCleaner.CleanerThread handles all logs where compaction is enabled.
+    */
+  @Test
+  def testDoesntCleanLogsWithCompactDeletePolicy() {
+    val logProps = new Properties()
+    logProps.put(LogConfig.CleanupPolicyProp, LogConfig.Compact + "," + LogConfig.Delete)
+    val log = logManager.createLog(TopicAndPartition(name, 0), LogConfig.fromProps(logConfig.originals, logProps))
+    var offset = 0L
+    for (_ <- 0 until 200) {
+      val set = TestUtils.singleMessageSet("test".getBytes(), key="test".getBytes())
+      val info = log.append(set)
+      offset = info.lastOffset
+    }
+
+    val numSegments = log.numberOfSegments
+    assertTrue("There should be more than one segment now.", log.numberOfSegments > 1)
+
+    log.logSegments.foreach(_.log.file.setLastModified(time.milliseconds))
+
+    time.sleep(maxLogAgeMs + 1)
+    assertEquals("number of segments shouldn't have changed", numSegments, log.numberOfSegments)
   }
 
   /**
@@ -170,25 +197,25 @@ class LogManagerTest {
     logManager.startup
     val log = logManager.createLog(TopicAndPartition(name, 0), config)
     val lastFlush = log.lastFlushTime
-    for(i <- 0 until 200) {
-      var set = TestUtils.singleMessageSet("test".getBytes())
+    for (_ <- 0 until 200) {
+      val set = TestUtils.singleMessageSet("test".getBytes())
       log.append(set)
     }
     time.sleep(logManager.InitialTaskDelayMs)
     assertTrue("Time based flush should have been triggered triggered", lastFlush != log.lastFlushTime)
   }
-  
+
   /**
    * Test that new logs that are created are assigned to the least loaded log directory
    */
   @Test
   def testLeastLoadedAssignment() {
     // create a log manager with multiple data directories
-    val dirs = Array(TestUtils.tempDir(), 
-                     TestUtils.tempDir(), 
+    val dirs = Array(TestUtils.tempDir(),
+                     TestUtils.tempDir(),
                      TestUtils.tempDir())
     logManager.shutdown()
-    logManager = createLogManager()
+    logManager = createLogManager(dirs)
 
     // verify that logs are always assigned to the least loaded partition
     for(partition <- 0 until 20) {
@@ -198,7 +225,7 @@ class LogManagerTest {
       assertTrue("Load should balance evenly", counts.max <= counts.min + 1)
     }
   }
-  
+
   /**
    * Test that it is not possible to open two log managers using the same data directory
    */
@@ -208,7 +235,7 @@ class LogManagerTest {
       createLogManager()
       fail("Should not be able to create a second log manager instance with the same data directory")
     } catch {
-      case e: KafkaException => // this is good 
+      case _: KafkaException => // this is good
     }
   }
 
@@ -252,7 +279,7 @@ class LogManagerTest {
                                        logManager: LogManager) {
     val logs = topicAndPartitions.map(this.logManager.createLog(_, logConfig))
     logs.foreach(log => {
-      for(i <- 0 until 50)
+      for (_ <- 0 until 50)
         log.append(TestUtils.singleMessageSet("test".getBytes()))
 
       log.flush()

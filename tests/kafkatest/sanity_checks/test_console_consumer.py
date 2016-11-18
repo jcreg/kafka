@@ -13,21 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
+
+from ducktape.mark import matrix
+from ducktape.mark import parametrize
 from ducktape.tests.test import Test
 from ducktape.utils.util import wait_until
-from ducktape.mark import parametrize
-from ducktape.mark import matrix
 
-from kafkatest.services.zookeeper import ZookeeperService
-from kafkatest.services.kafka import KafkaService
-from kafkatest.services.kafka.version import LATEST_0_8_2
 from kafkatest.services.console_consumer import ConsoleConsumer
-from kafkatest.utils.remote_account import line_count, file_exists
+from kafkatest.services.kafka import KafkaService
 from kafkatest.services.verifiable_producer import VerifiableProducer
-from kafkatest.services.security.security_config import SecurityConfig
-
-
-import time
+from kafkatest.services.zookeeper import ZookeeperService
+from kafkatest.utils.remote_account import line_count, file_exists
+from kafkatest.version import LATEST_0_8_2
 
 
 class ConsoleConsumerTest(Test):
@@ -39,17 +37,20 @@ class ConsoleConsumerTest(Test):
         self.zk = ZookeeperService(test_context, num_nodes=1)
         self.kafka = KafkaService(self.test_context, num_nodes=1, zk=self.zk,
                                   topics={self.topic: {"partitions": 1, "replication-factor": 1}})
-        self.consumer = ConsoleConsumer(self.test_context, num_nodes=1, kafka=self.kafka, topic=self.topic)
+        self.consumer = ConsoleConsumer(self.test_context, num_nodes=1, kafka=self.kafka, topic=self.topic, new_consumer=False)
 
     def setUp(self):
         self.zk.start()
 
     @parametrize(security_protocol='PLAINTEXT', new_consumer=False)
+    @parametrize(security_protocol='SASL_SSL', sasl_mechanism='PLAIN')
     @matrix(security_protocol=['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL'])
-    def test_lifecycle(self, security_protocol, new_consumer=True):
+    def test_lifecycle(self, security_protocol, new_consumer=True, sasl_mechanism='GSSAPI'):
         """Check that console consumer starts/stops properly, and that we are capturing log output."""
 
         self.kafka.security_protocol = security_protocol
+        self.kafka.client_sasl_mechanism = sasl_mechanism
+        self.kafka.interbroker_sasl_mechanism = sasl_mechanism
         self.kafka.start()
 
         self.consumer.security_protocol = security_protocol

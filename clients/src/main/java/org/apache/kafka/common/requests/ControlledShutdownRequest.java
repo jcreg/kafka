@@ -42,7 +42,7 @@ public class ControlledShutdownRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 throw new IllegalArgumentException(String.format("Version 0 is not supported. It is only supported by " +
@@ -64,6 +64,6 @@ public class ControlledShutdownRequest extends AbstractRequest {
     }
 
     public static ControlledShutdownRequest parse(ByteBuffer buffer) {
-        return new ControlledShutdownRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new ControlledShutdownRequest(CURRENT_SCHEMA.read(buffer));
     }
 }

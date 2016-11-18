@@ -17,14 +17,13 @@
 
 package other.kafka
 
-import org.I0Itec.zkclient.ZkClient
 import kafka.api._
 import kafka.utils.{ZkUtils, ShutdownableThread}
-import org.apache.kafka.common.protocol.SecurityProtocol
+import org.apache.kafka.common.protocol.Errors
 import scala.collection._
 import kafka.client.ClientUtils
 import joptsimple.OptionParser
-import kafka.common.{ErrorMapping, OffsetAndMetadata, TopicAndPartition}
+import kafka.common.{OffsetAndMetadata, TopicAndPartition}
 import kafka.network.BlockingChannel
 import scala.util.Random
 import java.io.IOException
@@ -90,12 +89,12 @@ object TestOffsetManager {
         numCommits.getAndIncrement
         commitTimer.time {
           val response = OffsetCommitResponse.readFrom(offsetsChannel.receive().payload())
-          if (response.commitStatus.exists(_._2 != ErrorMapping.NoError)) numErrors.getAndIncrement
+          if (response.commitStatus.exists(_._2 != Errors.NONE.code)) numErrors.getAndIncrement
         }
         offset += 1
       }
       catch {
-        case e1: ClosedByInterruptException =>
+        case _: ClosedByInterruptException =>
           offsetsChannel.disconnect()
         case e2: IOException =>
           println("Commit thread %d: Error while committing offsets to %s:%d for group %s due to %s.".format(id, offsetsChannel.host, offsetsChannel.port, groupId, e2))
@@ -153,13 +152,13 @@ object TestOffsetManager {
 
           fetchTimer.time {
             val response = OffsetFetchResponse.readFrom(channel.receive().payload())
-            if (response.requestInfo.exists(_._2.error != ErrorMapping.NoError)) {
+            if (response.requestInfo.exists(_._2.error != Errors.NONE.code)) {
               numErrors.getAndIncrement
             }
           }
         }
         catch {
-          case e1: ClosedByInterruptException =>
+          case _: ClosedByInterruptException =>
             channel.disconnect()
             channels.remove(coordinatorId)
           case e2: IOException =>
@@ -169,7 +168,7 @@ object TestOffsetManager {
         }
       }
       catch {
-        case e: IOException =>
+        case _: IOException =>
           println("Error while querying %s:%d - shutting down query channel.".format(metadataChannel.host, metadataChannel.port))
           metadataChannel.disconnect()
           println("Creating new query channel.")
@@ -256,7 +255,7 @@ object TestOffsetManager {
     var statsThread: StatsThread = null
     try {
       zkUtils = ZkUtils(zookeeper, 6000, 2000, false)
-      commitThreads = (0 to (threadCount-1)).map { threadId =>
+      commitThreads = (0 until threadCount).map { threadId =>
         new CommitThread(threadId, partitionCount, commitIntervalMs, zkUtils)
       }
 

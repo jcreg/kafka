@@ -49,7 +49,7 @@ public class HeartbeatRequest extends AbstractRequest {
     }
 
     @Override
-    public AbstractRequestResponse getErrorResponse(int versionId, Throwable e) {
+    public AbstractResponse getErrorResponse(int versionId, Throwable e) {
         switch (versionId) {
             case 0:
                 return new HeartbeatResponse(Errors.forException(e).code());
@@ -76,6 +76,6 @@ public class HeartbeatRequest extends AbstractRequest {
     }
 
     public static HeartbeatRequest parse(ByteBuffer buffer) {
-        return new HeartbeatRequest((Struct) CURRENT_SCHEMA.read(buffer));
+        return new HeartbeatRequest(CURRENT_SCHEMA.read(buffer));
     }
 }

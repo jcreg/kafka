@@ -25,14 +25,22 @@ import org.apache.kafka.streams.processor.StateStore;
 import org.apache.kafka.streams.processor.StateStoreSupplier;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
 
 public class MockStateStoreSupplier implements StateStoreSupplier {
     private final String name;
     private final boolean persistent;
+    private final boolean loggingEnabled;
 
     public MockStateStoreSupplier(String name, boolean persistent) {
+        this(name, persistent, true);
+    }
+
+    public MockStateStoreSupplier(String name, boolean persistent, boolean loggingEnabled) {
         this.name = name;
         this.persistent = persistent;
+        this.loggingEnabled = loggingEnabled;
     }
 
     @Override
@@ -42,13 +50,28 @@ public class MockStateStoreSupplier implements StateStoreSupplier {
 
     @Override
     public StateStore get() {
-        return new MockStateStore(name, persistent);
+        if (loggingEnabled) {
+            return new MockStateStore(name, persistent).enableLogging();
+        } else {
+            return new MockStateStore(name, persistent);
+        }
+    }
+
+    @Override
+    public Map<String, String> logConfig() {
+        return Collections.emptyMap();
+    }
+
+    @Override
+    public boolean loggingEnabled() {
+        return loggingEnabled;
     }
 
     public static class MockStateStore implements StateStore {
         private final String name;
         private final boolean persistent;
 
+        public boolean loggingEnabled = false;
         public boolean initialized = false;
         public boolean flushed = false;
         public boolean closed = false;
@@ -59,14 +82,19 @@ public class MockStateStoreSupplier implements StateStoreSupplier {
             this.persistent = persistent;
         }
 
+        public MockStateStore enableLogging() {
+            loggingEnabled = true;
+            return this;
+        }
+
         @Override
         public String name() {
             return name;
         }
 
         @Override
-        public void init(ProcessorContext context) {
-            context.register(this, stateRestoreCallback);
+        public void init(ProcessorContext context, StateStore root) {
+            context.register(root, loggingEnabled, stateRestoreCallback);
             initialized = true;
         }
 
@@ -83,6 +111,11 @@ public class MockStateStoreSupplier implements StateStoreSupplier {
         @Override
         public boolean persistent() {
             return persistent;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return !closed;
         }
 
         public final StateRestoreCallback stateRestoreCallback = new StateRestoreCallback() {
